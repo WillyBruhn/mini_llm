@@ -1,0 +1,8 @@
+{
+    "recommendations": [
+        "ms-vscode.cpptools",
+        "nvidia.nsight-vscode-edition",
+        "drain99.perfetto-trace",
+        "ms-python.python"
+    ]
+}

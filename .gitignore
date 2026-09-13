@@ -1,0 +1,14 @@
+build/
+*.o
+*.nsys-rep
+*.sqlite
+*.trace.json
+*.ncu-rep
+models/*.safetensors
+models/*.bin
+models/*.gguf
+models/gpt2/
+tests/reference_data/
+profiles/
+__pycache__/
+.DS_Store

@@ -1,0 +1,96 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Build (CPU)",
+            "type": "shell",
+            "command": "make all",
+            "group": { "kind": "build", "isDefault": true },
+            "problemMatcher": "$gcc",
+            "options": { "cwd": "${workspaceFolder}" }
+        },
+        {
+            "label": "Build (CPU, debug)",
+            "type": "shell",
+            "command": "gcc -Wall -Wextra -g -O0 -std=c11 -Iinclude -o build/mini_llm_debug src/*.c -lm",
+            "group": "build",
+            "problemMatcher": "$gcc",
+            "options": { "cwd": "${workspaceFolder}" }
+        },
+        {
+            "label": "Build (GPU)",
+            "type": "shell",
+            "command": "make gpu",
+            "group": "build",
+            "problemMatcher": "$gcc",
+            "options": { "cwd": "${workspaceFolder}" }
+        },
+        {
+            "label": "Build (GPU, debug)",
+            "type": "shell",
+            "command": "nvcc -g -G -lineinfo -O0 -Iinclude -o build/mini_llm_gpu_debug src/main.c src/*.c src/*.cu -lm",
+            "group": "build",
+            "problemMatcher": "$gcc",
+            "options": { "cwd": "${workspaceFolder}" }
+        },
+        {
+            "label": "Build tests",
+            "type": "shell",
+            "command": "make build/test_layers",
+            "group": "build",
+            "problemMatcher": "$gcc",
+            "options": { "cwd": "${workspaceFolder}" }
+        },
+        {
+            "label": "Run",
+            "type": "shell",
+            "command": "./build/mini_llm",
+            "group": "test",
+            "dependsOn": "Build (CPU)",
+            "options": { "cwd": "${workspaceFolder}" }
+        },
+        {
+            "label": "Run tests",
+            "type": "shell",
+            "command": "make test",
+            "group": "test",
+            "problemMatcher": "$gcc",
+            "options": { "cwd": "${workspaceFolder}" }
+        },
+        {
+            "label": "Benchmark (CPU)",
+            "type": "shell",
+            "command": "make bench",
+            "group": "test",
+            "options": { "cwd": "${workspaceFolder}" }
+        },
+        {
+            "label": "Benchmark (GPU)",
+            "type": "shell",
+            "command": "CUDA_VISIBLE_DEVICES=1 make bench-gpu",
+            "group": "test",
+            "options": { "cwd": "${workspaceFolder}" }
+        },
+        {
+            "label": "Profile with nsys",
+            "type": "shell",
+            "command": "CUDA_VISIBLE_DEVICES=1 make profile-nsys",
+            "group": "test",
+            "options": { "cwd": "${workspaceFolder}" }
+        },
+        {
+            "label": "Profile with ncu",
+            "type": "shell",
+            "command": "CUDA_VISIBLE_DEVICES=1 make profile-ncu",
+            "group": "test",
+            "options": { "cwd": "${workspaceFolder}" }
+        },
+        {
+            "label": "Generate reference data",
+            "type": "shell",
+            "command": "python3 scripts/dump_reference.py",
+            "group": "test",
+            "options": { "cwd": "${workspaceFolder}" }
+        }
+    ]
+}
