@@ -1,8 +1,8 @@
 CC      = gcc
 NVCC    = nvcc
-CFLAGS  = -Wall -Wextra -O2 -std=c11 -Iinclude
+CFLAGS  = -Wall -Wextra -O2 -std=c11 -Iengine/include -Iengine/tests
 LDFLAGS = -lm
-NVFLAGS = -O2 -Iinclude
+NVFLAGS = -O2 -Iengine/include -Iengine/tests
 BUILD   = build
 GPU     ?= 1
 
@@ -10,6 +10,8 @@ GPU     ?= 1
 CPU_SRCS = $(wildcard engine/src/*.c)
 CPU_OBJS = $(patsubst engine/src/%.c,$(BUILD)/%.o,$(CPU_SRCS))
 TEST_SRCS = $(wildcard engine/tests/test_*.c)
+CUDA_SRCS = $(wildcard engine/src/*.cu)
+GPU_TEST_SRCS = $(wildcard engine/tests/test_*.cu)
 
 # Default target
 all: $(BUILD)/mini_llm
@@ -25,8 +27,14 @@ $(BUILD)/%.o: engine/src/%.c | $(BUILD)
 test: $(BUILD)/test_runner
 	./$<
 
+test-gpu: $(BUILD)/test_runner_gpu
+	./$<
+
 $(BUILD)/test_runner: $(TEST_SRCS) engine/tests/test_util.h $(filter-out $(BUILD)/main.o,$(CPU_OBJS)) | $(BUILD)
-	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+	$(CC) $(CFLAGS) -o $@ $(TEST_SRCS) $(filter-out $(BUILD)/main.o,$(CPU_OBJS)) $(LDFLAGS)
+
+$(BUILD)/test_runner_gpu: $(GPU_TEST_SRCS) $(CUDA_SRCS) engine/tests/test_util.h $(filter-out $(BUILD)/main.o,$(CPU_OBJS)) | $(BUILD)
+	$(NVCC) $(NVFLAGS) -o $@ $(GPU_TEST_SRCS) $(CUDA_SRCS) $(filter-out $(BUILD)/main.o,$(CPU_OBJS)) $(LDFLAGS)
 
 # --- CUDA build (Phase 3+) ---
 gpu: $(BUILD)/mini_llm_gpu
@@ -65,4 +73,4 @@ $(BUILD):
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all test gpu profile-nsys profile-ncu bench bench-gpu reference run clean
+.PHONY: all test test-gpu gpu profile-nsys profile-ncu bench bench-gpu reference run clean

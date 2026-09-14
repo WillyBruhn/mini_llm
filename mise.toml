@@ -5,6 +5,7 @@ uv = "latest"
 [tasks]
 build = "make all"
 test = "make test"
+test-gpu = "make test-gpu"
 run = "make run"
 bench = "make bench"
 reference = "uv run scripts/dump_reference.py"

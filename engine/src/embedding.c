@@ -1,4 +1,4 @@
-#include "embedding.h"
+#include "../include/embedding.h"
 
 void embed_tokens(
     float *out,
