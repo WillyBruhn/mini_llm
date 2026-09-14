@@ -2,7 +2,7 @@
 Dump GPT-2 intermediate tensors as raw binary files for C verification.
 
 Usage:
-    python3 scripts/dump_reference.py [--prompt "Hello world"] [--out tests/reference_data]
+    uv run scripts/dump_reference.py [--prompt "Hello world"] [--out tests/reference_data]
 
 For each layer, dumps the output tensor as fp32 little-endian binary.
 Also dumps the final logits and the expected next token.

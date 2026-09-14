@@ -11,4 +11,5 @@ models/gpt2/
 tests/reference_data/
 profiles/
 __pycache__/
+.venv/
 .DS_Store

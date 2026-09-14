@@ -1,0 +1,14 @@
+[project]
+name = "mini-llm-tools"
+version = "0.1.0"
+description = "Python tooling for the mini_llm inference engine"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "huggingface-hub>=0.34,<1.0",
+    "numpy>=2.0,<3.0",
+    "torch>=2.7,<3.0",
+    "transformers>=4.50,<5.0",
+]
+
+[tool.uv]
+default-groups = []

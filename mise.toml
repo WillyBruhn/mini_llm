@@ -1,0 +1,13 @@
+[tools]
+python = "3.12"
+uv = "latest"
+
+[tasks]
+build = "make all"
+test = "make test"
+run = "make run"
+bench = "make bench"
+reference = "uv run scripts/dump_reference.py"
+download-model = "uv run scripts/download_model.py"
+complete = "uv run scripts/complete.py"
+chat = "uv run scripts/complete.py"
