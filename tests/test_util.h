@@ -26,7 +26,7 @@ typedef struct {
 #define RUN_ALL_TESTS() test_run_all()
 
 #define TEST_MAIN()                     \
-    int main(void) {                    \
+    __attribute__((weak)) int main(void) { \
         return RUN_ALL_TESTS();         \
     }
 
