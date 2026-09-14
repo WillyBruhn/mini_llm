@@ -7,9 +7,9 @@ BUILD   = build
 GPU     ?= 1
 
 # Source files
-CPU_SRCS = $(wildcard src/*.c)
-CPU_OBJS = $(patsubst src/%.c,$(BUILD)/%.o,$(CPU_SRCS))
-TEST_SRCS = $(wildcard tests/test_*.c)
+CPU_SRCS = $(wildcard engine/src/*.c)
+CPU_OBJS = $(patsubst engine/src/%.c,$(BUILD)/%.o,$(CPU_SRCS))
+TEST_SRCS = $(wildcard engine/tests/test_*.c)
 
 # Default target
 all: $(BUILD)/mini_llm
@@ -18,20 +18,20 @@ all: $(BUILD)/mini_llm
 $(BUILD)/mini_llm: $(CPU_OBJS) | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
-$(BUILD)/%.o: src/%.c | $(BUILD)
+$(BUILD)/%.o: engine/src/%.c | $(BUILD)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 # --- Tests ---
 test: $(BUILD)/test_runner
 	./$<
 
-$(BUILD)/test_runner: $(TEST_SRCS) tests/test_util.h $(filter-out $(BUILD)/main.o,$(CPU_OBJS)) | $(BUILD)
+$(BUILD)/test_runner: $(TEST_SRCS) engine/tests/test_util.h $(filter-out $(BUILD)/main.o,$(CPU_OBJS)) | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
 # --- CUDA build (Phase 3+) ---
 gpu: $(BUILD)/mini_llm_gpu
 
-$(BUILD)/mini_llm_gpu: src/main.c $(wildcard src/*.c) $(wildcard src/*.cu) | $(BUILD)
+$(BUILD)/mini_llm_gpu: engine/src/main.c $(wildcard engine/src/*.c) $(wildcard engine/src/*.cu) | $(BUILD)
 	$(NVCC) $(NVFLAGS) -o $@ $^ $(LDFLAGS)
 
 # --- Profiling ---
