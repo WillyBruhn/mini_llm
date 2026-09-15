@@ -5,6 +5,7 @@ LDFLAGS = -lm
 NVFLAGS = -O2 -Iengine/include -Iengine/tests
 BUILD   = build
 GPU     ?= 1
+CUDA_SANITIZER ?= /usr/local/cuda-12.6
 
 # Source files
 CPU_SRCS = $(wildcard engine/src/*.c)
@@ -30,11 +31,19 @@ test: $(BUILD)/test_runner
 test-gpu: $(BUILD)/test_runner_gpu
 	./$<
 
+sanitize-gpu: $(BUILD)/test_runner_gpu_debug
+	CUDA_VISIBLE_DEVICES=$(GPU) \
+	LD_LIBRARY_PATH=$(CUDA_SANITIZER)/compute-sanitizer:$(CUDA_SANITIZER)/lib64:$$LD_LIBRARY_PATH \
+	$(CUDA_SANITIZER)/bin/compute-sanitizer --tool memcheck ./$<
+
 $(BUILD)/test_runner: $(TEST_SRCS) engine/tests/test_util.h $(filter-out $(BUILD)/main.o,$(CPU_OBJS)) | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ $(TEST_SRCS) $(filter-out $(BUILD)/main.o,$(CPU_OBJS)) $(LDFLAGS)
 
 $(BUILD)/test_runner_gpu: $(GPU_TEST_SRCS) $(CUDA_SRCS) engine/tests/test_util.h $(filter-out $(BUILD)/main.o,$(CPU_OBJS)) | $(BUILD)
 	$(NVCC) $(NVFLAGS) -o $@ $(GPU_TEST_SRCS) $(CUDA_SRCS) $(filter-out $(BUILD)/main.o,$(CPU_OBJS)) $(LDFLAGS)
+
+$(BUILD)/test_runner_gpu_debug: $(GPU_TEST_SRCS) $(CUDA_SRCS) engine/tests/test_util.h $(filter-out $(BUILD)/main.o,$(CPU_OBJS)) | $(BUILD)
+	$(NVCC) -g -G -O0 -DTEST_NO_FORK $(NVFLAGS) -o $@ $(GPU_TEST_SRCS) $(CUDA_SRCS) $(filter-out $(BUILD)/main.o,$(CPU_OBJS)) $(LDFLAGS)
 
 # --- CUDA build (Phase 3+) ---
 gpu: $(BUILD)/mini_llm_gpu
@@ -73,4 +82,4 @@ $(BUILD):
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all test test-gpu gpu profile-nsys profile-ncu bench bench-gpu reference run clean
+.PHONY: all test test-gpu sanitize-gpu gpu profile-nsys profile-ncu bench bench-gpu reference run clean

@@ -9,6 +9,11 @@ __global__ void gelu_kernel(
     const size_t n
 ){
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (idx >= n) {
+        return;
+    }
+
     out[idx] = 0.5f * x[idx] * (1.0f + erff(x[idx] / sqrtf(2.0f)));
 }
 
