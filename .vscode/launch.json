@@ -29,7 +29,44 @@
                 { "name": "CUDA_VISIBLE_DEVICES", "value": "1" }
             ],
             "debuggerPath": "/usr/local/cuda-13.4/bin/cuda-gdb",
+            "setupCommands": [
+                { "text": "set follow-fork-mode child", "ignoreFailures": true }
+            ],
             "preLaunchTask": "Build (GPU, debug)"
+        },
+        {
+            "name": "Debug GELU GPU test",
+            "type": "cuda-gdb",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/test_gelu_gpu_debug",
+            "args": [],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [
+                { "name": "CUDA_VISIBLE_DEVICES", "value": "1" }
+            ],
+            "debuggerPath": "/usr/local/cuda-13.4/bin/cuda-gdb",
+            "setupCommands": [
+                { "text": "set follow-fork-mode child", "ignoreFailures": true }
+            ],
+            "preLaunchTask": "Build GELU GPU test (debug)"
+        },
+        {
+            "name": "Debug all GPU tests",
+            "type": "cuda-gdb",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/test_runner_gpu_debug",
+            "args": [],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [
+                { "name": "CUDA_VISIBLE_DEVICES", "value": "1" }
+            ],
+            "debuggerPath": "/usr/local/cuda-13.4/bin/cuda-gdb",
+            "setupCommands": [
+                { "text": "set follow-fork-mode child", "ignoreFailures": true }
+            ],
+            "preLaunchTask": "Build all GPU tests (debug)"
         }
     ]
 }

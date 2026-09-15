@@ -28,7 +28,23 @@
         {
             "label": "Build (GPU, debug)",
             "type": "shell",
-            "command": "nvcc -g -G -lineinfo -O0 -Iinclude -o build/mini_llm_gpu_debug src/main.c src/*.c src/*.cu -lm",
+            "command": "nvcc -g -G -O0 -Iinclude -o build/mini_llm_gpu_debug src/main.c src/*.c src/*.cu -lm",
+            "group": "build",
+            "problemMatcher": "$gcc",
+            "options": { "cwd": "${workspaceFolder}" }
+        },
+        {
+            "label": "Build GELU GPU test (debug)",
+            "type": "shell",
+            "command": "nvcc -g -G -O0 -DTEST_NO_FORK -Iengine/include -Iengine/tests -o build/test_gelu_gpu_debug engine/tests/test_gelu.cu engine/src/gelu.c engine/src/gelu.cu -lm",
+            "group": "build",
+            "problemMatcher": "$gcc",
+            "options": { "cwd": "${workspaceFolder}" }
+        },
+        {
+            "label": "Build all GPU tests (debug)",
+            "type": "shell",
+            "command": "nvcc -g -G -O0 -DTEST_NO_FORK -Iengine/include -Iengine/tests -o build/test_runner_gpu_debug engine/tests/test_*.cu engine/src/*.cu engine/src/embedding.c engine/src/gelu.c engine/src/layernorm.c engine/src/tensor_loading.c -lm",
             "group": "build",
             "problemMatcher": "$gcc",
             "options": { "cwd": "${workspaceFolder}" }

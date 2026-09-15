@@ -94,6 +94,12 @@ static inline int test_run_all(void) {
         printf("RUN  %s\n", test->name);
         fflush(stdout);
 
+    #ifdef TEST_NO_FORK
+        test->fn();
+        printf("PASS %s\n", test->name);
+        passed++;
+        continue;
+    #else
         pid_t pid = fork();
         if (pid < 0) {
             fprintf(stderr, "FAIL %s: could not fork test process\n", test->name);
@@ -123,6 +129,7 @@ static inline int test_run_all(void) {
             printf("FAIL %s: exit %d\n", test->name, WEXITSTATUS(status));
             failed++;
         }
+#endif
     }
 
     printf("\n%d passed, %d failed\n", passed, failed);
