@@ -9,12 +9,14 @@ extern "C" {
 
 void gelu(
     float *out,
-    float *x
+    float *x,
+    const size_t n
 );
 
 void gelu_gpu(
     float *out,
-    float *x
+    float *x,
+    const size_t n
 );
 
 #ifdef __cplusplus

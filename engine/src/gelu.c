@@ -4,8 +4,10 @@
 
 void gelu(
     float *out,
-    float *x
+    float *x,
+    const size_t n
 ){
-    *out = 0.5f * *x * (1.0f + erff(*x / sqrtf(2.0f)));
-    return;
+    for (size_t i = 0; i < n; i++){
+        out[i] = 0.5f * x[i] * (1.0f + erff(x[i] / sqrtf(2.0f)));
+    }
 }
