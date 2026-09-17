@@ -44,7 +44,7 @@
         {
             "label": "Build all GPU tests (debug)",
             "type": "shell",
-            "command": "nvcc -g -G -O0 -DTEST_NO_FORK -Iengine/include -Iengine/tests -o build/test_runner_gpu_debug engine/tests/test_*.cu engine/src/*.cu engine/src/embedding.c engine/src/gelu.c engine/src/layernorm.c engine/src/tensor_loading.c -lm",
+            "command": "nvcc -g -G -O0 -DTEST_NO_FORK -Iengine/include -Iengine/tests -o build/test_runner_gpu_debug engine/tests/test_*.cu engine/src/*.cu engine/src/*.c -lm",
             "group": "build",
             "problemMatcher": "$gcc",
             "options": { "cwd": "${workspaceFolder}" }

@@ -16,6 +16,15 @@ void matrixmult(
     const size_t b_columns
 );
 
+void matrixmult_gpu(
+    const float *a,
+    const float *b,
+    float *out,
+    const size_t a_rows,
+    const size_t a_columns,
+    const size_t b_columns
+);
+
 #ifdef __cplusplus
 }
 #endif
