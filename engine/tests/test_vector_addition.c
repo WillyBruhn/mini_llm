@@ -9,7 +9,7 @@ TEST(vector_addition_simple) {
          7.0f,  8.0f, 9.0f
     };
     const size_t n = 3;
-        float out[] = {0.0f, 0.0f, 0.0f};
+    float out[] = {0.0f, 0.0f, 0.0f};
     const float expected[] = {
          8.0f,  10.0f, 12.0f
     };
