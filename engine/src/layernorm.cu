@@ -1,4 +1,5 @@
 #include "../include/layernorm.h"
+#include "../include/util.h"
 
 #include <cuda_runtime.h>
 
@@ -68,7 +69,7 @@ void layernorm_gpu(
     cudaMemcpy(d_beta, beta, parameter_bytes, cudaMemcpyHostToDevice);
 
     int threads_per_block = 256;
-    int blocks = (int)((n_tokens + threads_per_block - 1) / threads_per_block);
+    int blocks = (int)ceil_div(n_tokens, threads_per_block);
 
     layernorm_kernel<<<blocks, threads_per_block>>>(
         d_out, d_input, d_gamma, d_beta, n_tokens, n_embd, epsilon

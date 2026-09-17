@@ -1,4 +1,5 @@
 #include "../include/embedding.h"
+#include "../include/util.h"
 
 #include <cuda_runtime.h>
 
@@ -57,7 +58,7 @@ void embed_tokens_gpu(
     cudaMemcpy(d_position_embedding, position_embedding, position_embedding_bytes, cudaMemcpyHostToDevice);
 
     int threads_per_block = 256;
-    int blocks = (int)((out_count + threads_per_block - 1) / threads_per_block);
+    int blocks = (int)ceil_div(out_count, threads_per_block);
 
     embed_tokens_kernel<<<blocks, threads_per_block>>>(
         d_out,

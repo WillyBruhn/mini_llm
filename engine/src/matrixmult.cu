@@ -1,4 +1,5 @@
 #include "../include/matrix_mult.h"
+#include "../include/util.h"
 
 #include <cuda_runtime.h>
 
@@ -61,7 +62,6 @@ void matrixmult_gpu(
 
     cudaMemcpy(d_a, a, a_bytes, cudaMemcpyHostToDevice);
     cudaMemcpy(d_b, b, b_bytes, cudaMemcpyHostToDevice);
-    cudaMemcpy(d_out, out, out_bytes, cudaMemcpyHostToDevice);
 
     dim3 threads_per_block(16, 16);
 

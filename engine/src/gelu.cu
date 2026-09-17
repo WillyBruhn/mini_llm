@@ -1,4 +1,5 @@
 #include "../include/gelu.h"
+#include "../include/util.h"
 #include <cuda_runtime.h>
 #include <math.h>
 
@@ -32,11 +33,10 @@ void gelu_gpu(
     cudaMalloc((void **)&d_out, out_bytes);
     cudaMalloc((void **)&d_x, x_bytes);
 
-    cudaMemcpy(d_out, out, out_bytes, cudaMemcpyHostToDevice);
     cudaMemcpy(d_x, x, x_bytes, cudaMemcpyHostToDevice);
 
     const int threads_per_block = 256;
-    int blocks = (int)((n + threads_per_block - 1) / threads_per_block);
+    int blocks = (int)ceil_div(n, threads_per_block);
 
     gelu_kernel<<<blocks, threads_per_block>>>(
         d_out, d_x, n
