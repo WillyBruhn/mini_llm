@@ -22,4 +22,27 @@ TEST(matrixmult_multiplies_row_major_matrices) {
     assert_tensor_near(out, expected, 4, 1e-6f);
 }
 
+TEST(matrixmult_multiplies_deterministic_100_by_100_matrices) {
+    const size_t dimension = 100;
+    const size_t element_count = dimension * dimension;
+    float a[element_count];
+    float b[element_count];
+    float *out = calloc(element_count, sizeof(float));
+    ASSERT_TRUE(out != NULL);
+
+    srand(12345);
+    for (size_t index = 0; index < element_count; index++) {
+        a[index] = (float)rand() / (float)RAND_MAX;
+        b[index] = (float)rand() / (float)RAND_MAX;
+    }
+
+    matrixmult(a, b, out, dimension, dimension, dimension);
+
+    for (size_t index = 0; index < element_count; index++) {
+        ASSERT_TRUE(isfinite(out[index]));
+    }
+
+    free(out);
+}
+
 TEST_MAIN()

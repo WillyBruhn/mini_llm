@@ -20,4 +20,24 @@ TEST(matrix_mult_gpu_matches_cpu) {
     assert_tensor_near(out_gpu, out, 4, 1e-6f);
 }
 
+TEST(matrix_mult_gpu_matches_cpu_for_deterministic_100_by_100_matrices) {
+    const size_t dimension = 100;
+    const size_t element_count = dimension * dimension;
+    float a[element_count];
+    float b[element_count];
+    float out[element_count] = {0};
+    float out_gpu[element_count] = {0};
+
+    srand(12345);
+    for (size_t index = 0; index < element_count; index++) {
+        a[index] = (float)rand() / (float)RAND_MAX;
+        b[index] = (float)rand() / (float)RAND_MAX;
+    }
+
+    matrixmult(a, b, out, dimension, dimension, dimension);
+    matrixmult_gpu(a, b, out_gpu, dimension, dimension, dimension);
+
+    assert_tensor_near(out_gpu, out, element_count, 1e-4f);
+}
+
 TEST_MAIN()
