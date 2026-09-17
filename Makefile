@@ -75,6 +75,12 @@ reference:
 run: $(BUILD)/mini_llm
 	./$<
 
+pytorch-test: $(BUILD)/libmini_llm.so
+	PYTHONPATH=pytorch/src uv run --group dev python -m pytest pytorch/tests
+
+$(BUILD)/libmini_llm.so: engine/src/vector_addition.c engine/include/vector_addition.h | $(BUILD)
+	$(CC) -Wall -Wextra -O2 -std=c11 -fPIC -shared -Iengine/include -o $@ engine/src/vector_addition.c
+
 # --- Utilities ---
 $(BUILD):
 	mkdir -p $(BUILD)
@@ -82,4 +88,4 @@ $(BUILD):
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all test test-gpu sanitize-gpu gpu profile-nsys profile-ncu bench bench-gpu reference run clean
+.PHONY: all test test-gpu sanitize-gpu pytorch-test gpu profile-nsys profile-ncu bench bench-gpu reference run clean

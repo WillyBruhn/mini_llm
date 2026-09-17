@@ -10,5 +10,11 @@ dependencies = [
     "transformers>=4.50,<5.0",
 ]
 
+[dependency-groups]
+dev = [
+    "ninja>=1.11,<2.0",
+    "pytest>=8.0,<9.0",
+]
+
 [tool.uv]
 default-groups = []

@@ -21,6 +21,13 @@ void vectoraddition_gpu(
     const size_t n
 );
 
+void vectoraddition_device(
+    const float *d_a,
+    const float *d_b,
+    float *d_out,
+    const size_t n
+);
+
 #ifdef __cplusplus
 }
 #endif
