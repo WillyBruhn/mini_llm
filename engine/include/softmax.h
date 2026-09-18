@@ -21,6 +21,20 @@ void softmax_gpu(
     size_t columns
 );
 
+void causal_softmax(
+    const float *input,
+    float *out,
+    size_t rows,
+    size_t columns
+);
+
+void causal_softmax_gpu(
+    const float *input,
+    float *out,
+    size_t rows,
+    size_t columns
+);
+
 #ifdef __cplusplus
 }
 #endif

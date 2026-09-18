@@ -31,4 +31,22 @@ TEST(softmax_handles_large_logits_stably) {
     ASSERT_NEAR(out[0] + out[1] + out[2], 1.0f, 1e-6f);
 }
 
+TEST(causal_softmax_masks_future_columns) {
+    const float input[] = {
+        1.0f, 2.0f, 3.0f,
+        1.0f, 2.0f, 3.0f,
+        1.0f, 2.0f, 3.0f,
+    };
+    float out[9] = {0};
+    const float expected[] = {
+        1.0f, 0.0f, 0.0f,
+        0.2689414f, 0.7310586f, 0.0f,
+        0.0900306f, 0.2447285f, 0.6652409f,
+    };
+
+    causal_softmax(input, out, 3, 3);
+
+    assert_tensor_near(out, expected, 9, 1e-6f);
+}
+
 TEST_MAIN()
