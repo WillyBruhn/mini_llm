@@ -35,6 +35,24 @@ __global__ void mult_kernel(
     // }
 }
 
+void matrixmult_device(
+    const float *d_a,
+    const float *d_b,
+    float *d_out,
+    const size_t a_rows,
+    const size_t a_columns,
+    const size_t b_columns
+){
+    dim3 threads_per_block(16, 16);
+    dim3 blocks(
+        (unsigned)ceil_div(a_rows, threads_per_block.x),
+        (unsigned)ceil_div(b_columns, threads_per_block.y)
+    );
+
+    mult_kernel<<<blocks, threads_per_block>>>(
+        d_a, d_b, d_out, a_rows, a_columns, b_columns
+    );
+}
 
 void matrixmult_gpu(
     const float *a,
@@ -63,16 +81,7 @@ void matrixmult_gpu(
     cudaMemcpy(d_a, a, a_bytes, cudaMemcpyHostToDevice);
     cudaMemcpy(d_b, b, b_bytes, cudaMemcpyHostToDevice);
 
-    dim3 threads_per_block(16, 16);
-
-    dim3 blocks(
-        (unsigned)((a_rows + threads_per_block.x - 1) /
-                threads_per_block.x),
-        (unsigned)((b_columns + threads_per_block.y - 1) /
-                threads_per_block.y)
-    );
-
-    mult_kernel<<<blocks, threads_per_block>>>(
+    matrixmult_device(
         d_a, d_b, d_out, a_rows, a_columns, b_columns
     );
 
