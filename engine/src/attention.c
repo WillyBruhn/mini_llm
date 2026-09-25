@@ -14,8 +14,8 @@ void attention_head(
     size_t head_size
 ) {
     size_t score_count = sequence_length * sequence_length;
-    float *scores = calloc(score_count, sizeof(float));
-    float *weights = calloc(score_count, sizeof(float));
+    float *scores = (float *)calloc(score_count, sizeof(float));
+    float *weights = (float *)calloc(score_count, sizeof(float));
 
     if (scores == NULL || weights == NULL) {
         free(scores);
@@ -74,10 +74,10 @@ void multi_head_attention(
 ) {
     size_t hidden_size = n_heads * head_size;
     size_t head_elements = sequence_length * head_size;
-    float *head_query = calloc(head_elements, sizeof(float));
-    float *head_key = calloc(head_elements, sizeof(float));
-    float *head_value = calloc(head_elements, sizeof(float));
-    float *head_out = calloc(head_elements, sizeof(float));
+    float *head_query = (float *)calloc(head_elements, sizeof(float));
+    float *head_key = (float *)calloc(head_elements, sizeof(float));
+    float *head_value = (float *)calloc(head_elements, sizeof(float));
+    float *head_out = (float *)calloc(head_elements, sizeof(float));
 
     if (head_query == NULL || head_key == NULL ||
         head_value == NULL || head_out == NULL) {

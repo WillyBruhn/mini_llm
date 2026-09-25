@@ -19,6 +19,24 @@ void gelu_gpu(
     const size_t n
 );
 
+void gelu_device(
+    float *d_out,
+    const float *d_input,
+    size_t n
+);
+
+void gelu_new(
+    float *out,
+    const float *input,
+    size_t n
+);
+
+void gelu_new_device(
+    float *d_out,
+    const float *d_input,
+    size_t n
+);
+
 #ifdef __cplusplus
 }
 #endif

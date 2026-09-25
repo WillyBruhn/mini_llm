@@ -72,6 +72,9 @@ bench-gpu: $(BUILD)/mini_llm_gpu
 reference:
 	uv run scripts/dump_reference.py
 
+weights:
+	uv run scripts/dump_weights.py
+
 run: $(BUILD)/mini_llm
 	./$<
 
@@ -88,4 +91,4 @@ $(BUILD):
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all test test-gpu sanitize-gpu pytorch-test gpu profile-nsys profile-ncu bench bench-gpu reference run clean
+.PHONY: all test test-gpu sanitize-gpu pytorch-test gpu profile-nsys profile-ncu bench bench-gpu reference weights run clean

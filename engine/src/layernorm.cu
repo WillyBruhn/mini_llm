@@ -42,6 +42,22 @@ __global__ void layernorm_kernel(
     }
 }
 
+void layernorm_device(
+    float *d_out,
+    const float *d_input,
+    const float *d_gamma,
+    const float *d_beta,
+    size_t n_tokens,
+    size_t n_embd,
+    float epsilon
+) {
+    int threads_per_block = 256;
+    int blocks = (int)ceil_div(n_tokens, threads_per_block);
+    layernorm_kernel<<<blocks, threads_per_block>>>(
+        d_out, d_input, d_gamma, d_beta, n_tokens, n_embd, epsilon
+    );
+}
+
 void layernorm_gpu(
     float *out,
     const float *input,
@@ -68,12 +84,8 @@ void layernorm_gpu(
     cudaMemcpy(d_gamma, gamma, parameter_bytes, cudaMemcpyHostToDevice);
     cudaMemcpy(d_beta, beta, parameter_bytes, cudaMemcpyHostToDevice);
 
-    int threads_per_block = 256;
-    int blocks = (int)ceil_div(n_tokens, threads_per_block);
-
-    layernorm_kernel<<<blocks, threads_per_block>>>(
-        d_out, d_input, d_gamma, d_beta, n_tokens, n_embd, epsilon
-    );
+    layernorm_device(d_out, d_input, d_gamma, d_beta,
+                     n_tokens, n_embd, epsilon);
     cudaDeviceSynchronize();
 
     cudaMemcpy(out, d_out, bytes, cudaMemcpyDeviceToHost);
