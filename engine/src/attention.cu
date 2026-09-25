@@ -66,6 +66,66 @@ __global__ void attention_head_kernel(
     }
 }
 
+__global__ void multi_head_attention_kernel(
+    const float *query,
+    const float *key,
+    const float *value,
+    float *out,
+    size_t sequence_length,
+    size_t n_heads,
+    size_t head_size
+) {
+    size_t index = blockIdx.x * blockDim.x + threadIdx.x;
+    size_t row_head_count = sequence_length * n_heads;
+    if (index >= row_head_count) {
+        return;
+    }
+
+    size_t query_row = index / n_heads;
+    size_t head = index % n_heads;
+    size_t hidden_size = n_heads * head_size;
+    size_t query_offset = query_row * hidden_size + head * head_size;
+    const float *query_vector = query + query_offset;
+    float scale = 1.0f / sqrtf((float)head_size);
+    float maximum = -FLT_MAX;
+
+    for (size_t key_row = 0; key_row <= query_row; key_row++) {
+        const float *key_vector = key + key_row * hidden_size + head * head_size;
+        float score = 0.0f;
+        for (size_t dimension = 0; dimension < head_size; dimension++) {
+            score += query_vector[dimension] * key_vector[dimension];
+        }
+        score *= scale;
+        if (score > maximum) {
+            maximum = score;
+        }
+    }
+
+    float total = 0.0f;
+    for (size_t key_row = 0; key_row <= query_row; key_row++) {
+        const float *key_vector = key + key_row * hidden_size + head * head_size;
+        float score = 0.0f;
+        for (size_t dimension = 0; dimension < head_size; dimension++) {
+            score += query_vector[dimension] * key_vector[dimension];
+        }
+        total += expf(score * scale - maximum);
+    }
+
+    for (size_t dimension = 0; dimension < head_size; dimension++) {
+        float weighted_sum = 0.0f;
+        for (size_t key_row = 0; key_row <= query_row; key_row++) {
+            const float *key_vector = key + key_row * hidden_size + head * head_size;
+            float score = 0.0f;
+            for (size_t key_dimension = 0; key_dimension < head_size; key_dimension++) {
+                score += query_vector[key_dimension] * key_vector[key_dimension];
+            }
+            float weight = expf(score * scale - maximum) / total;
+            weighted_sum += weight * value[key_row * hidden_size + head * head_size + dimension];
+        }
+        out[query_offset + dimension] = weighted_sum;
+    }
+}
+
 void attention_head_device(
     const float *d_query,
     const float *d_key,
@@ -120,6 +180,59 @@ void attention_head_gpu(
     );
     cudaDeviceSynchronize();
 
+    cudaMemcpy(out, d_out, bytes, cudaMemcpyDeviceToHost);
+
+    cudaFree(d_out);
+    cudaFree(d_value);
+    cudaFree(d_key);
+    cudaFree(d_query);
+}
+
+void multi_head_attention_device(
+    const float *d_query,
+    const float *d_key,
+    const float *d_value,
+    float *d_out,
+    size_t sequence_length,
+    size_t n_heads,
+    size_t head_size
+) {
+    size_t threads_per_block = 256;
+    size_t blocks = ceil_div(sequence_length * n_heads, threads_per_block);
+    multi_head_attention_kernel<<<blocks, threads_per_block>>>(
+        d_query, d_key, d_value, d_out,
+        sequence_length, n_heads, head_size
+    );
+}
+
+void multi_head_attention_gpu(
+    const float *query,
+    const float *key,
+    const float *value,
+    float *out,
+    size_t sequence_length,
+    size_t n_heads,
+    size_t head_size
+) {
+    size_t bytes = sequence_length * n_heads * head_size * sizeof(float);
+    float *d_query = NULL;
+    float *d_key = NULL;
+    float *d_value = NULL;
+    float *d_out = NULL;
+
+    cudaMalloc((void **)&d_query, bytes);
+    cudaMalloc((void **)&d_key, bytes);
+    cudaMalloc((void **)&d_value, bytes);
+    cudaMalloc((void **)&d_out, bytes);
+    cudaMemcpy(d_query, query, bytes, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_key, key, bytes, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_value, value, bytes, cudaMemcpyHostToDevice);
+
+    multi_head_attention_device(
+        d_query, d_key, d_value, d_out,
+        sequence_length, n_heads, head_size
+    );
+    cudaDeviceSynchronize();
     cudaMemcpy(out, d_out, bytes, cudaMemcpyDeviceToHost);
 
     cudaFree(d_out);

@@ -26,4 +26,26 @@ TEST(attention_head_gpu_matches_cpu) {
     assert_tensor_near(gpu_out, cpu_out, 6, 1e-6f);
 }
 
+TEST(attention_head_gpu_preserves_nonuniform_weights) {
+    const float query[] = {
+        1.0f, 0.0f,
+        1.0f, 0.0f,
+    };
+    const float key[] = {
+        1.0f, 0.0f,
+        0.0f, 1.0f,
+    };
+    const float value[] = {
+        10.0f, 1.0f,
+        0.0f, 20.0f,
+    };
+    float cpu_out[4] = {0};
+    float gpu_out[4] = {0};
+
+    attention_head(query, key, value, cpu_out, 2, 2);
+    attention_head_gpu(query, key, value, gpu_out, 2, 2);
+
+    assert_tensor_near(gpu_out, cpu_out, 4, 1e-6f);
+}
+
 TEST_MAIN()

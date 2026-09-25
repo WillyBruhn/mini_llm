@@ -62,3 +62,63 @@ void attention_head(
     free(scores);
     free(weights);
 }
+
+void multi_head_attention(
+    const float *query,
+    const float *key,
+    const float *value,
+    float *out,
+    size_t sequence_length,
+    size_t n_heads,
+    size_t head_size
+) {
+    size_t hidden_size = n_heads * head_size;
+    size_t head_elements = sequence_length * head_size;
+    float *head_query = calloc(head_elements, sizeof(float));
+    float *head_key = calloc(head_elements, sizeof(float));
+    float *head_value = calloc(head_elements, sizeof(float));
+    float *head_out = calloc(head_elements, sizeof(float));
+
+    if (head_query == NULL || head_key == NULL ||
+        head_value == NULL || head_out == NULL) {
+        free(head_query);
+        free(head_key);
+        free(head_value);
+        free(head_out);
+        return;
+    }
+
+    for (size_t head = 0; head < n_heads; head++) {
+        for (size_t row = 0; row < sequence_length; row++) {
+            size_t packed_offset = row * hidden_size + head * head_size;
+            size_t head_offset = row * head_size;
+            for (size_t dimension = 0; dimension < head_size; dimension++) {
+                head_query[head_offset + dimension] = query[packed_offset + dimension];
+                head_key[head_offset + dimension] = key[packed_offset + dimension];
+                head_value[head_offset + dimension] = value[packed_offset + dimension];
+            }
+        }
+
+        attention_head(
+            head_query,
+            head_key,
+            head_value,
+            head_out,
+            sequence_length,
+            head_size
+        );
+
+        for (size_t row = 0; row < sequence_length; row++) {
+            size_t packed_offset = row * hidden_size + head * head_size;
+            size_t head_offset = row * head_size;
+            for (size_t dimension = 0; dimension < head_size; dimension++) {
+                out[packed_offset + dimension] = head_out[head_offset + dimension];
+            }
+        }
+    }
+
+    free(head_query);
+    free(head_key);
+    free(head_value);
+    free(head_out);
+}
