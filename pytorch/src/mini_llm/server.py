@@ -41,9 +41,15 @@ class Tokenizer(Protocol):
 
 
 class InferenceService:
-    def __init__(self, engine: InferenceEngine, tokenizer: Tokenizer) -> None:
+    def __init__(
+        self,
+        engine: InferenceEngine,
+        tokenizer: Tokenizer,
+        model_name: str = "gpt2-small-native-cpu",
+    ) -> None:
         self.engine = engine
         self.tokenizer = tokenizer
+        self.model_name = model_name
 
     def _prepare(self, prompt: object, max_new_tokens: object) -> list[int]:
         if not isinstance(prompt, str) or not prompt.strip():
@@ -211,7 +217,7 @@ class ServiceHandler(BaseHTTPRequestHandler):
         if self.path == "/health":
             self._send_json(
                 HTTPStatus.OK,
-                {"status": "ok", "model": "gpt2-small-native-cpu"},
+                {"status": "ok", "model": self.service.model_name},
             )
             return
         self._send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
@@ -268,9 +274,16 @@ def parse_args() -> argparse.Namespace:
         help="Directory created by `make weights`",
     )
     parser.add_argument(
+        "--backend",
+        choices=["cpu", "gpu"],
+        default="cpu",
+        help="Where the model runs. The GPU needs `make gpu-lib`",
+    )
+    parser.add_argument(
         "--library",
-        default=str(root / "build/libmini_llm_inference.so"),
-        help="Native shared library created by `make inference-lib`",
+        default=None,
+        help="Native shared library. Default: build/libmini_llm_inference.so (cpu) "
+        "or build/libmini_llm_gpu.so (gpu)",
     )
     return parser.parse_args()
 
@@ -286,8 +299,8 @@ def main() -> None:
     tokenizer = AutoTokenizer.from_pretrained(  # type: ignore[no-untyped-call]
         args.model, local_files_only=True, use_fast=True
     )
-    engine = NativeGPT2(args.weights, args.library)
-    service = InferenceService(engine, tokenizer)
+    engine = NativeGPT2(args.weights, args.library, args.backend)
+    service = InferenceService(engine, tokenizer, f"gpt2-small-native-{args.backend}")
     server = ThreadingHTTPServer((args.host, args.port), make_handler(service))
     logger.info("Listening on http://%s:%s (Ctrl+C to stop)", args.host, args.port)
     try:

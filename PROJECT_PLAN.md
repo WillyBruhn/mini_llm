@@ -96,8 +96,18 @@ uv run scripts/chat.py
 
 The server defaults to `127.0.0.1:8000`. `GET /health` reports readiness and
 `POST /generate` accepts `{"prompt":"Hello","max_new_tokens":8}`. Generation is
-greedy and runs on CPU; each generated token recomputes the prompt without a KV
-cache, so keep `max_new_tokens` small until inference is optimized.
+greedy and runs on the CPU by default; each generated token recomputes the prompt
+without a KV cache, so keep `max_new_tokens` small on the CPU.
+
+To run the model on the GPU (weights stay on the GPU), use:
+
+```sh
+make serve-gpu          # builds build/libmini_llm_gpu.so, then serves with --backend gpu
+make bench-gpu          # C benchmark with a GPU-time-per-stage table
+```
+
+Select the GPU with `GPU=<index>` (default 1, an RTX 3060). A failed CUDA call
+stops the server process (see `engine/include/cuda_check.h`).
 
 ### Phase 2: Tokenizer
 - [ ] Implement BPE tokenizer (GPT-2 uses byte-level BPE)

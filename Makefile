@@ -118,6 +118,28 @@ run: $(BUILD)/mini_llm
 pytorch-test: $(BUILD)/libmini_llm.so
 	uv run --group dev python -m pytest pytorch/tests
 
+# GPU library for the Python server: the C code and the CUDA code in one .so.
+# nvcc links it, so the CUDA runtime is inside. Select the GPU with CUDA_VISIBLE_DEVICES.
+PIC_OBJS = $(patsubst engine/src/%.c,$(BUILD)/pic/%.o,$(CPU_SRCS))
+
+$(BUILD)/pic/%.o: engine/src/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -fPIC -c -o $@ $<
+
+gpu-lib: $(BUILD)/libmini_llm_gpu.so
+
+$(BUILD)/libmini_llm_gpu.so: $(PIC_OBJS) $(CUDA_SRCS) $(wildcard engine/include/*.h) | $(BUILD)
+	$(NVCC) $(NVFLAGS) -Xcompiler -fPIC -shared -o $@ $(CUDA_SRCS) $(PIC_OBJS) $(LDFLAGS)
+
+# Pass more options with SERVE_ARGS, for example SERVE_ARGS="--port 8001".
+SERVE_ARGS ?=
+
+serve: inference-lib
+	uv run scripts/serve.py $(SERVE_ARGS)
+
+serve-gpu: gpu-lib
+	CUDA_VISIBLE_DEVICES=$(GPU) uv run scripts/serve.py --backend gpu $(SERVE_ARGS)
+
 $(BUILD)/libmini_llm.so: engine/src/vector_addition.c engine/include/vector_addition.h | $(BUILD)
 	$(CC) -Wall -Wextra -O2 -std=c11 -fPIC -shared -Iengine/include -o $@ engine/src/vector_addition.c
 
@@ -171,4 +193,4 @@ $(BUILD):
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all test gpt2-test sanitize-cpu test-gpu gpt2-gpu-test sanitize-gpu bench-gpu bench-cpu profile-nsys profile-ncu pytorch-test inference-lib reference weights run clean check format ruff-format-check ruff-check mypy clang-format-check file-length semgrep semgrep-test
+.PHONY: gpu-lib serve serve-gpu all test gpt2-test sanitize-cpu test-gpu gpt2-gpu-test sanitize-gpu bench-gpu bench-cpu profile-nsys profile-ncu pytorch-test inference-lib reference weights run clean check format ruff-format-check ruff-check mypy clang-format-check file-length semgrep semgrep-test
