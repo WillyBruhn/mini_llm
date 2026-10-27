@@ -15,48 +15,42 @@ typedef struct {
     test_fn fn;
 } TestCase;
 
-#define TEST(name)                                                          \
-    static void test_##name(void);                                          \
-    static const TestCase test_case_##name = {                              \
-            #name, __FILE__, test_##name};                                  \
-    static const TestCase *const test_case_ptr_##name                       \
-        __attribute__((used, section("test_cases"))) = &test_case_##name;   \
+#define TEST(name)                                                           \
+    static void test_##name(void);                                           \
+    static const TestCase test_case_##name = {#name, __FILE__, test_##name}; \
+    static const TestCase *const test_case_ptr_##name                        \
+        __attribute__((used, section("test_cases"))) = &test_case_##name;    \
     static void test_##name(void)
 
 #define RUN_ALL_TESTS() test_run_all()
 
-#define TEST_MAIN()                     \
+#define TEST_MAIN()                        \
     __attribute__((weak)) int main(void) { \
-        return RUN_ALL_TESTS();         \
+        return RUN_ALL_TESTS();            \
     }
 
 #define ASSERT_TRUE(cond)                                                   \
     do {                                                                    \
-        if (!(cond)) {                                                       \
+        if (!(cond)) {                                                      \
             fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); \
             exit(1);                                                        \
         }                                                                   \
     } while (0)
 
-#define ASSERT_NEAR(actual, expected, tol)                                      \
-    do {                                                                        \
-        float a_ = (actual);                                                     \
-        float e_ = (expected);                                                   \
-        float diff_ = fabsf(a_ - e_);                                            \
-        if (diff_ > (tol)) {                                                     \
-            fprintf(stderr,                                                       \
-                    "FAIL %s:%d: expected %.8f, got %.8f, diff %.8f, tol %.8f\n", \
-                    __FILE__, __LINE__, e_, a_, diff_, (float)(tol));            \
-            exit(1);                                                            \
-        }                                                                       \
+#define ASSERT_NEAR(actual, expected, tol)                                                \
+    do {                                                                                  \
+        float a_ = (actual);                                                              \
+        float e_ = (expected);                                                            \
+        float diff_ = fabsf(a_ - e_);                                                     \
+        if (diff_ > (tol)) {                                                              \
+            fprintf(stderr, "FAIL %s:%d: expected %.8f, got %.8f, diff %.8f, tol %.8f\n", \
+                    __FILE__, __LINE__, e_, a_, diff_, (float)(tol));                     \
+            exit(1);                                                                      \
+        }                                                                                 \
     } while (0)
 
-static inline void assert_tensor_near(
-    const float *actual,
-    const float *expected,
-    size_t count,
-    float tolerance
-) {
+static inline void
+assert_tensor_near(const float *actual, const float *expected, size_t count, float tolerance) {
     float max_error = 0.0f;
     size_t max_index = 0;
 
@@ -69,13 +63,10 @@ static inline void assert_tensor_near(
     }
 
     if (max_error > tolerance) {
-        fprintf(stderr,
-                "FAIL tensor mismatch: max_error=%g at index=%zu actual=%g expected=%g tolerance=%g\n",
-                max_error,
-                max_index,
-                actual[max_index],
-                expected[max_index],
-                tolerance);
+        fprintf(
+            stderr,
+            "FAIL tensor mismatch: max_error=%g at index=%zu actual=%g expected=%g tolerance=%g\n",
+            max_error, max_index, actual[max_index], expected[max_index], tolerance);
         exit(1);
     }
 }
@@ -94,12 +85,12 @@ static inline int test_run_all(void) {
         printf("RUN  %s\n", test->name);
         fflush(stdout);
 
-    #ifdef TEST_NO_FORK
+#ifdef TEST_NO_FORK
         test->fn();
         printf("PASS %s\n", test->name);
         passed++;
         continue;
-    #else
+#else
         pid_t pid = fork();
         if (pid < 0) {
             fprintf(stderr, "FAIL %s: could not fork test process\n", test->name);

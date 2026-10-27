@@ -2,12 +2,7 @@
 
 #include <math.h>
 
-void softmax(
-    const float *input,
-    float *out,
-    size_t rows,
-    size_t columns
-) {
+void softmax(const float *input, float *out, size_t rows, size_t columns) {
     for (size_t row = 0; row < rows; row++) {
         const float *input_row = input + row * columns;
         float *out_row = out + row * columns;
@@ -31,12 +26,7 @@ void softmax(
     }
 }
 
-void causal_softmax(
-    const float *input,
-    float *out,
-    size_t rows,
-    size_t columns
-) {
+void causal_softmax(const float *input, float *out, size_t rows, size_t columns) {
     for (size_t row = 0; row < rows; row++) {
         const float *input_row = input + row * columns;
         float *out_row = out + row * columns;

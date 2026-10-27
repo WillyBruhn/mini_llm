@@ -26,27 +26,23 @@ typedef struct {
     const float *mlp_down_bias;
 } TransformerBlockWeights;
 
-void transformer_block_forward(
-    const float *input,
-    float *out,
-    const TransformerBlockWeights *weights,
-    size_t sequence_length,
-    size_t hidden_size,
-    size_t n_heads,
-    size_t mlp_size,
-    float epsilon
-);
+void transformer_block_forward(const float *input,
+                               float *out,
+                               const TransformerBlockWeights *weights,
+                               size_t sequence_length,
+                               size_t hidden_size,
+                               size_t n_heads,
+                               size_t mlp_size,
+                               float epsilon);
 
-void transformer_block_gpu(
-    const float *input,
-    float *out,
-    const TransformerBlockWeights *weights,
-    size_t sequence_length,
-    size_t hidden_size,
-    size_t n_heads,
-    size_t mlp_size,
-    float epsilon
-);
+void transformer_block_gpu(const float *input,
+                           float *out,
+                           const TransformerBlockWeights *weights,
+                           size_t sequence_length,
+                           size_t hidden_size,
+                           size_t n_heads,
+                           size_t mlp_size,
+                           float epsilon);
 
 #ifdef __cplusplus
 }

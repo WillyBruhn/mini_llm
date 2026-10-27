@@ -3,8 +3,7 @@
 
 TEST(layernorm_gpu_matches_cpu) {
     float input[] = {
-        1.0f, 2.0f, 3.0f,
-        2.0f, 4.0f, 6.0f,
+        1.0f, 2.0f, 3.0f, 2.0f, 4.0f, 6.0f,
     };
     float gamma[] = {1.0f, 1.0f, 1.0f};
     float beta[] = {0.0f, 0.0f, 0.0f};

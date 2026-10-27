@@ -18,11 +18,7 @@ struct GPT2Model {
     TransformerBlockWeights *blocks;
 };
 
-static float *load_tensor(
-    const char *directory,
-    const char *filename,
-    size_t count
-) {
+static float *load_tensor(const char *directory, const char *filename, size_t count) {
     char path[1024];
     int length = snprintf(path, sizeof(path), "%s/%s", directory, filename);
     if (length < 0 || (size_t)length >= sizeof(path)) {
@@ -32,31 +28,25 @@ static float *load_tensor(
     return load_f32_file(path, count);
 }
 
-static int load_block(
-    const char *directory,
-    size_t layer,
-    TransformerBlockWeights *weights
-) {
+static int load_block(const char *directory, size_t layer, TransformerBlockWeights *weights) {
     char filename[128];
     char prefix[32];
     snprintf(prefix, sizeof(prefix), "transformer.h.%zu", layer);
 
-#define LOAD_FIELD(field, tensor_name, count)                                  \
-    do {                                                                       \
+#define LOAD_FIELD(field, tensor_name, count)                                   \
+    do {                                                                        \
         snprintf(filename, sizeof(filename), "%s.%s.bin", prefix, tensor_name); \
         weights->field = load_tensor(directory, filename, count);               \
         if (weights->field == NULL) {                                           \
-            return 0;                                                          \
-        }                                                                      \
+            return 0;                                                           \
+        }                                                                       \
     } while (0)
 
     LOAD_FIELD(ln1_gamma, "ln_1.weight", GPT2_N_EMBD);
     LOAD_FIELD(ln1_beta, "ln_1.bias", GPT2_N_EMBD);
 
     snprintf(filename, sizeof(filename), "%s.attn.c_attn.weight.bin", prefix);
-    float *qkv_weights = load_tensor(
-        directory, filename, GPT2_N_EMBD * GPT2_N_EMBD * 3
-    );
+    float *qkv_weights = load_tensor(directory, filename, GPT2_N_EMBD * GPT2_N_EMBD * 3);
     if (qkv_weights == NULL) {
         return 0;
     }
@@ -92,8 +82,7 @@ static int load_block(
             size_t destination = row * GPT2_N_EMBD + column;
             query_weights[destination] = qkv_weights[source + column];
             key_weights[destination] = qkv_weights[source + GPT2_N_EMBD + column];
-            value_weights[destination] =
-                qkv_weights[source + GPT2_N_EMBD * 2 + column];
+            value_weights[destination] = qkv_weights[source + GPT2_N_EMBD * 2 + column];
         }
     }
     memcpy(query_bias, qkv_bias, GPT2_N_EMBD * sizeof(float));
@@ -139,22 +128,13 @@ GPT2Model *gpt2_model_load(const char *weights_directory) {
         return NULL;
     }
 
-    model->token_embedding = load_tensor(
-        weights_directory,
-        "transformer.wte.weight.bin",
-        GPT2_N_VOCAB * GPT2_N_EMBD
-    );
-    model->position_embedding = load_tensor(
-        weights_directory,
-        "transformer.wpe.weight.bin",
-        GPT2_N_POSITIONS * GPT2_N_EMBD
-    );
-    model->final_ln_gamma = load_tensor(
-        weights_directory, "transformer.ln_f.weight.bin", GPT2_N_EMBD
-    );
-    model->final_ln_beta = load_tensor(
-        weights_directory, "transformer.ln_f.bias.bin", GPT2_N_EMBD
-    );
+    model->token_embedding =
+        load_tensor(weights_directory, "transformer.wte.weight.bin", GPT2_N_VOCAB * GPT2_N_EMBD);
+    model->position_embedding = load_tensor(weights_directory, "transformer.wpe.weight.bin",
+                                            GPT2_N_POSITIONS * GPT2_N_EMBD);
+    model->final_ln_gamma =
+        load_tensor(weights_directory, "transformer.ln_f.weight.bin", GPT2_N_EMBD);
+    model->final_ln_beta = load_tensor(weights_directory, "transformer.ln_f.bias.bin", GPT2_N_EMBD);
     if (model->token_embedding == NULL || model->position_embedding == NULL ||
         model->final_ln_gamma == NULL || model->final_ln_beta == NULL) {
         gpt2_model_free(model);
@@ -204,16 +184,14 @@ void gpt2_model_free(GPT2Model *model) {
     free(model);
 }
 
-static int gpt2_forward_impl(
-    const GPT2Model *model,
-    const int *tokens,
-    size_t sequence_length,
-    float *logits,
-    float *block_outputs,
-    int last_token_only
-) {
-    if (model == NULL || tokens == NULL || logits == NULL ||
-        sequence_length == 0 || sequence_length > GPT2_N_POSITIONS) {
+static int gpt2_forward_impl(const GPT2Model *model,
+                             const int *tokens,
+                             size_t sequence_length,
+                             float *logits,
+                             float *block_outputs,
+                             int last_token_only) {
+    if (model == NULL || tokens == NULL || logits == NULL || sequence_length == 0 ||
+        sequence_length > GPT2_N_POSITIONS) {
         return 0;
     }
     for (size_t index = 0; index < sequence_length; index++) {
@@ -234,47 +212,23 @@ static int gpt2_forward_impl(
         return 0;
     }
 
-    embed_tokens(
-        hidden,
-        tokens,
-        model->token_embedding,
-        model->position_embedding,
-        sequence_length,
-        GPT2_N_EMBD
-    );
+    embed_tokens(hidden, tokens, model->token_embedding, model->position_embedding, sequence_length,
+                 GPT2_N_EMBD);
 
     for (size_t layer = 0; layer < GPT2_N_LAYER; layer++) {
-        transformer_block_forward(
-            hidden,
-            next_hidden,
-            &model->blocks[layer],
-            sequence_length,
-            GPT2_N_EMBD,
-            GPT2_N_HEAD,
-            GPT2_N_INNER,
-            1e-5f
-        );
+        transformer_block_forward(hidden, next_hidden, &model->blocks[layer], sequence_length,
+                                  GPT2_N_EMBD, GPT2_N_HEAD, GPT2_N_INNER, 1e-5f);
         float *temporary = hidden;
         hidden = next_hidden;
         next_hidden = temporary;
         if (block_outputs != NULL) {
-            memcpy(
-                block_outputs + layer * hidden_elements,
-                hidden,
-                hidden_elements * sizeof(float)
-            );
+            memcpy(block_outputs + layer * hidden_elements, hidden,
+                   hidden_elements * sizeof(float));
         }
     }
 
-    layernorm(
-        normalized,
-        hidden,
-        model->final_ln_gamma,
-        model->final_ln_beta,
-        sequence_length,
-        GPT2_N_EMBD,
-        1e-5f
-    );
+    layernorm(normalized, hidden, model->final_ln_gamma, model->final_ln_beta, sequence_length,
+              GPT2_N_EMBD, 1e-5f);
 
     size_t first_logit_row = last_token_only ? sequence_length - 1 : 0;
     for (size_t row = first_logit_row; row < sequence_length; row++) {
@@ -296,23 +250,17 @@ static int gpt2_forward_impl(
     return 1;
 }
 
-int gpt2_forward(
-    const GPT2Model *model,
-    const int *tokens,
-    size_t sequence_length,
-    float *logits,
-    float *block_outputs
-) {
-    return gpt2_forward_impl(
-        model, tokens, sequence_length, logits, block_outputs, 0
-    );
+int gpt2_forward(const GPT2Model *model,
+                 const int *tokens,
+                 size_t sequence_length,
+                 float *logits,
+                 float *block_outputs) {
+    return gpt2_forward_impl(model, tokens, sequence_length, logits, block_outputs, 0);
 }
 
-int gpt2_forward_last(
-    const GPT2Model *model,
-    const int *tokens,
-    size_t sequence_length,
-    float *logits
-) {
+int gpt2_forward_last(const GPT2Model *model,
+                      const int *tokens,
+                      size_t sequence_length,
+                      float *logits) {
     return gpt2_forward_impl(model, tokens, sequence_length, logits, NULL, 1);
 }

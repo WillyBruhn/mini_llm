@@ -1,4 +1,5 @@
 #include "../include/attention.h"
+#include "../include/cuda_check.h"
 #include "../include/util.h"
 
 #include <cuda_runtime.h>
@@ -6,14 +7,12 @@
 #include <float.h>
 #include <math.h>
 
-__global__ void attention_head_kernel(
-    const float *query,
-    const float *key,
-    const float *value,
-    float *out,
-    size_t sequence_length,
-    size_t head_size
-) {
+__global__ void attention_head_kernel(const float *query,
+                                      const float *key,
+                                      const float *value,
+                                      float *out,
+                                      size_t sequence_length,
+                                      size_t head_size) {
     size_t query_row = blockIdx.x * blockDim.x + threadIdx.x;
     if (query_row >= sequence_length) {
         return;
@@ -66,15 +65,13 @@ __global__ void attention_head_kernel(
     }
 }
 
-__global__ void multi_head_attention_kernel(
-    const float *query,
-    const float *key,
-    const float *value,
-    float *out,
-    size_t sequence_length,
-    size_t n_heads,
-    size_t head_size
-) {
+__global__ void multi_head_attention_kernel(const float *query,
+                                            const float *key,
+                                            const float *value,
+                                            float *out,
+                                            size_t sequence_length,
+                                            size_t n_heads,
+                                            size_t head_size) {
     size_t index = blockIdx.x * blockDim.x + threadIdx.x;
     size_t row_head_count = sequence_length * n_heads;
     if (index >= row_head_count) {
@@ -126,117 +123,94 @@ __global__ void multi_head_attention_kernel(
     }
 }
 
-void attention_head_device(
-    const float *d_query,
-    const float *d_key,
-    const float *d_value,
-    float *d_out,
-    size_t sequence_length,
-    size_t head_size
-) {
+void attention_head_device(const float *d_query,
+                           const float *d_key,
+                           const float *d_value,
+                           float *d_out,
+                           size_t sequence_length,
+                           size_t head_size) {
     size_t threads_per_block = 256;
     size_t blocks = ceil_div(sequence_length, threads_per_block);
 
-    attention_head_kernel<<<blocks, threads_per_block>>>(
-        d_query,
-        d_key,
-        d_value,
-        d_out,
-        sequence_length,
-        head_size
-    );
+    attention_head_kernel<<<blocks, threads_per_block>>>(d_query, d_key, d_value, d_out,
+                                                         sequence_length, head_size);
+    CUDA_CHECK_LAUNCH();
 }
 
-void attention_head_gpu(
-    const float *query,
-    const float *key,
-    const float *value,
-    float *out,
-    size_t sequence_length,
-    size_t head_size
-) {
+void attention_head_gpu(const float *query,
+                        const float *key,
+                        const float *value,
+                        float *out,
+                        size_t sequence_length,
+                        size_t head_size) {
     size_t bytes = sequence_length * head_size * sizeof(float);
     float *d_query = NULL;
     float *d_key = NULL;
     float *d_value = NULL;
     float *d_out = NULL;
 
-    cudaMalloc((void **)&d_query, bytes);
-    cudaMalloc((void **)&d_key, bytes);
-    cudaMalloc((void **)&d_value, bytes);
-    cudaMalloc((void **)&d_out, bytes);
+    CUDA_CHECK(cudaMalloc((void **)&d_query, bytes));
+    CUDA_CHECK(cudaMalloc((void **)&d_key, bytes));
+    CUDA_CHECK(cudaMalloc((void **)&d_value, bytes));
+    CUDA_CHECK(cudaMalloc((void **)&d_out, bytes));
 
-    cudaMemcpy(d_query, query, bytes, cudaMemcpyHostToDevice);
-    cudaMemcpy(d_key, key, bytes, cudaMemcpyHostToDevice);
-    cudaMemcpy(d_value, value, bytes, cudaMemcpyHostToDevice);
+    CUDA_CHECK(cudaMemcpy(d_query, query, bytes, cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_key, key, bytes, cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_value, value, bytes, cudaMemcpyHostToDevice));
 
-    attention_head_device(
-        d_query,
-        d_key,
-        d_value,
-        d_out,
-        sequence_length,
-        head_size
-    );
-    cudaDeviceSynchronize();
+    attention_head_device(d_query, d_key, d_value, d_out, sequence_length, head_size);
+    CUDA_CHECK(cudaDeviceSynchronize());
 
-    cudaMemcpy(out, d_out, bytes, cudaMemcpyDeviceToHost);
+    CUDA_CHECK(cudaMemcpy(out, d_out, bytes, cudaMemcpyDeviceToHost));
 
-    cudaFree(d_out);
-    cudaFree(d_value);
-    cudaFree(d_key);
-    cudaFree(d_query);
+    CUDA_CHECK(cudaFree(d_out));
+    CUDA_CHECK(cudaFree(d_value));
+    CUDA_CHECK(cudaFree(d_key));
+    CUDA_CHECK(cudaFree(d_query));
 }
 
-void multi_head_attention_device(
-    const float *d_query,
-    const float *d_key,
-    const float *d_value,
-    float *d_out,
-    size_t sequence_length,
-    size_t n_heads,
-    size_t head_size
-) {
+void multi_head_attention_device(const float *d_query,
+                                 const float *d_key,
+                                 const float *d_value,
+                                 float *d_out,
+                                 size_t sequence_length,
+                                 size_t n_heads,
+                                 size_t head_size) {
     size_t threads_per_block = 256;
     size_t blocks = ceil_div(sequence_length * n_heads, threads_per_block);
-    multi_head_attention_kernel<<<blocks, threads_per_block>>>(
-        d_query, d_key, d_value, d_out,
-        sequence_length, n_heads, head_size
-    );
+    multi_head_attention_kernel<<<blocks, threads_per_block>>>(d_query, d_key, d_value, d_out,
+                                                               sequence_length, n_heads, head_size);
+    CUDA_CHECK_LAUNCH();
 }
 
-void multi_head_attention_gpu(
-    const float *query,
-    const float *key,
-    const float *value,
-    float *out,
-    size_t sequence_length,
-    size_t n_heads,
-    size_t head_size
-) {
+void multi_head_attention_gpu(const float *query,
+                              const float *key,
+                              const float *value,
+                              float *out,
+                              size_t sequence_length,
+                              size_t n_heads,
+                              size_t head_size) {
     size_t bytes = sequence_length * n_heads * head_size * sizeof(float);
     float *d_query = NULL;
     float *d_key = NULL;
     float *d_value = NULL;
     float *d_out = NULL;
 
-    cudaMalloc((void **)&d_query, bytes);
-    cudaMalloc((void **)&d_key, bytes);
-    cudaMalloc((void **)&d_value, bytes);
-    cudaMalloc((void **)&d_out, bytes);
-    cudaMemcpy(d_query, query, bytes, cudaMemcpyHostToDevice);
-    cudaMemcpy(d_key, key, bytes, cudaMemcpyHostToDevice);
-    cudaMemcpy(d_value, value, bytes, cudaMemcpyHostToDevice);
+    CUDA_CHECK(cudaMalloc((void **)&d_query, bytes));
+    CUDA_CHECK(cudaMalloc((void **)&d_key, bytes));
+    CUDA_CHECK(cudaMalloc((void **)&d_value, bytes));
+    CUDA_CHECK(cudaMalloc((void **)&d_out, bytes));
+    CUDA_CHECK(cudaMemcpy(d_query, query, bytes, cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_key, key, bytes, cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_value, value, bytes, cudaMemcpyHostToDevice));
 
-    multi_head_attention_device(
-        d_query, d_key, d_value, d_out,
-        sequence_length, n_heads, head_size
-    );
-    cudaDeviceSynchronize();
-    cudaMemcpy(out, d_out, bytes, cudaMemcpyDeviceToHost);
+    multi_head_attention_device(d_query, d_key, d_value, d_out, sequence_length, n_heads,
+                                head_size);
+    CUDA_CHECK(cudaDeviceSynchronize());
+    CUDA_CHECK(cudaMemcpy(out, d_out, bytes, cudaMemcpyDeviceToHost));
 
-    cudaFree(d_out);
-    cudaFree(d_value);
-    cudaFree(d_key);
-    cudaFree(d_query);
+    CUDA_CHECK(cudaFree(d_out));
+    CUDA_CHECK(cudaFree(d_value));
+    CUDA_CHECK(cudaFree(d_key));
+    CUDA_CHECK(cudaFree(d_query));
 }

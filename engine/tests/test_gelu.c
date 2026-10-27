@@ -3,7 +3,6 @@
 
 #include "../include/gelu.h"
 
-
 TEST(gelu_produces_correct_value_for_x) {
     const size_t n = 3;
     float input[] = {0.0f, 1.0f, 10};
@@ -12,7 +11,7 @@ TEST(gelu_produces_correct_value_for_x) {
 
     gelu(out, input, n);
 
-    for (size_t i = 0; i < n; i++){
+    for (size_t i = 0; i < n; i++) {
         ASSERT_NEAR(out[i], expected[i], 1e-6f);
     }
 }

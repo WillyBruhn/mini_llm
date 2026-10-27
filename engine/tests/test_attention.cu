@@ -3,19 +3,13 @@
 
 TEST(attention_head_gpu_matches_cpu) {
     const float query[] = {
-        1.0f, 1.0f,
-        1.0f, 1.0f,
-        1.0f, 1.0f,
+        1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f,
     };
     const float key[] = {
-        1.0f, 1.0f,
-        1.0f, 1.0f,
-        1.0f, 1.0f,
+        1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f,
     };
     const float value[] = {
-        1.0f, 10.0f,
-        3.0f, 20.0f,
-        5.0f, 30.0f,
+        1.0f, 10.0f, 3.0f, 20.0f, 5.0f, 30.0f,
     };
     float cpu_out[6] = {0};
     float gpu_out[6] = {0};
@@ -28,16 +22,22 @@ TEST(attention_head_gpu_matches_cpu) {
 
 TEST(attention_head_gpu_preserves_nonuniform_weights) {
     const float query[] = {
-        1.0f, 0.0f,
-        1.0f, 0.0f,
+        1.0f,
+        0.0f,
+        1.0f,
+        0.0f,
     };
     const float key[] = {
-        1.0f, 0.0f,
-        0.0f, 1.0f,
+        1.0f,
+        0.0f,
+        0.0f,
+        1.0f,
     };
     const float value[] = {
-        10.0f, 1.0f,
-        0.0f, 20.0f,
+        10.0f,
+        1.0f,
+        0.0f,
+        20.0f,
     };
     float cpu_out[4] = {0};
     float gpu_out[4] = {0};

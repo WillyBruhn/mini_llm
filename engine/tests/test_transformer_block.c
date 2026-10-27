@@ -10,8 +10,7 @@ TEST(transformer_block_preserves_input_when_learned_projections_are_zero) {
         token_elements = sequence_length * hidden_size,
     };
     const float input[] = {
-        1.0f, 2.0f, 3.0f, 4.0f,
-        5.0f, 6.0f, 7.0f, 8.0f,
+        1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f, 8.0f,
     };
     float gamma[] = {1.0f, 1.0f, 1.0f, 1.0f};
     float beta[] = {0.0f, 0.0f, 0.0f, 0.0f};
@@ -23,20 +22,18 @@ TEST(transformer_block_preserves_input_when_learned_projections_are_zero) {
     float zero_mlp_down_bias[hidden_size] = {0};
     float out[token_elements] = {0};
     TransformerBlockWeights weights = {
-        gamma, beta,
-        zero_hidden, zero_hidden_bias,
-        zero_hidden, zero_hidden_bias,
-        zero_hidden, zero_hidden_bias,
-        zero_hidden, zero_hidden_bias,
-        gamma, beta,
-        zero_mlp_up, zero_mlp_up_bias,
+        gamma,         beta,
+        zero_hidden,   zero_hidden_bias,
+        zero_hidden,   zero_hidden_bias,
+        zero_hidden,   zero_hidden_bias,
+        zero_hidden,   zero_hidden_bias,
+        gamma,         beta,
+        zero_mlp_up,   zero_mlp_up_bias,
         zero_mlp_down, zero_mlp_down_bias,
     };
 
-    transformer_block_forward(
-        input, out, &weights,
-        sequence_length, hidden_size, n_heads, mlp_size, 1e-5f
-    );
+    transformer_block_forward(input, out, &weights, sequence_length, hidden_size, n_heads, mlp_size,
+                              1e-5f);
 
     assert_tensor_near(out, input, token_elements, 1e-6f);
 }
@@ -60,20 +57,18 @@ TEST(transformer_block_applies_mlp_and_gelu) {
     float out[hidden_size] = {0};
     const float expected[] = {-0.1588080f, 2.8411920f};
     TransformerBlockWeights weights = {
-        gamma, beta,
+        gamma,       beta,
         zero_hidden, zero_hidden_bias,
         zero_hidden, zero_hidden_bias,
         zero_hidden, zero_hidden_bias,
         zero_hidden, zero_hidden_bias,
-        gamma, beta,
-        mlp_up, mlp_up_bias,
-        mlp_down, mlp_down_bias,
+        gamma,       beta,
+        mlp_up,      mlp_up_bias,
+        mlp_down,    mlp_down_bias,
     };
 
-    transformer_block_forward(
-        input, out, &weights,
-        sequence_length, hidden_size, n_heads, mlp_size, 1e-5f
-    );
+    transformer_block_forward(input, out, &weights, sequence_length, hidden_size, n_heads, mlp_size,
+                              1e-5f);
 
     assert_tensor_near(out, expected, hidden_size, 1e-5f);
 }

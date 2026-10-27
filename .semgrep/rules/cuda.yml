@@ -1,0 +1,24 @@
+rules:
+  - id: cu-unchecked-cuda-call
+    languages: [regex]
+    severity: ERROR
+    message: >-
+      Wrap every CUDA runtime call in CUDA_CHECK, for example
+      `CUDA_CHECK(cudaMalloc(...));`. An unchecked failure gives wrong
+      results without any error. See engine/include/cuda_check.h.
+    # A call that starts a line and is not an argument of CUDA_CHECK(.
+    pattern-regex: (?m)(?<!\(\n)(?<!,\n)^[ \t]*cuda[A-Z]\w*\(
+    paths:
+      include:
+        - "*.cu"
+
+  - id: cu-unchecked-launch
+    languages: [regex]
+    severity: ERROR
+    message: >-
+      Put `CUDA_CHECK_LAUNCH();` right after every kernel launch. A launch
+      returns no error. A bad launch setup fails silently without this line.
+    pattern-regex: (?s)\b\w+<<<[^;]*;(?!\s*CUDA_CHECK_LAUNCH\(\);)
+    paths:
+      include:
+        - "*.cu"

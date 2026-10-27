@@ -3,8 +3,7 @@
 
 TEST(softmax_gpu_matches_cpu) {
     const float input[] = {
-        1.0f, 2.0f, 3.0f,
-        0.0f, 0.0f, 0.0f,
+        1.0f, 2.0f, 3.0f, 0.0f, 0.0f, 0.0f,
     };
     float cpu_out[6] = {0};
     float gpu_out[6] = {0};
@@ -17,9 +16,7 @@ TEST(softmax_gpu_matches_cpu) {
 
 TEST(causal_softmax_gpu_matches_cpu) {
     const float input[] = {
-        1.0f, 2.0f, 3.0f,
-        1.0f, 2.0f, 3.0f,
-        1.0f, 2.0f, 3.0f,
+        1.0f, 2.0f, 3.0f, 1.0f, 2.0f, 3.0f, 1.0f, 2.0f, 3.0f,
     };
     float cpu_out[9] = {0};
     float gpu_out[9] = {0};

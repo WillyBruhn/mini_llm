@@ -1,24 +1,22 @@
 #include "../include/matrix_mult.h"
+#include "../include/cuda_check.h"
 #include "../include/util.h"
 
 #include <cuda_runtime.h>
 
-
-__global__ void mult_kernel(
-    const float *a,
-    const float *b,
-    float *out,
-    const size_t a_rows,
-    const size_t a_columns,
-    const size_t b_columns
-){
+__global__ void mult_kernel(const float *a,
+                            const float *b,
+                            float *out,
+                            const size_t a_rows,
+                            const size_t a_columns,
+                            const size_t b_columns) {
     size_t row = blockIdx.x * blockDim.x + threadIdx.x;
     size_t col = blockIdx.y * blockDim.y + threadIdx.y;
 
-    if (row >= a_rows){
+    if (row >= a_rows) {
         return;
     }
-    if (col >= b_columns){
+    if (col >= b_columns) {
         return;
     }
 
@@ -27,41 +25,33 @@ __global__ void mult_kernel(
     float sum = 0.0f;
 
     for (size_t inner = 0; inner < a_columns; inner++) {
-        sum += a[row * a_columns + inner] *
-            b[inner * b_columns + col];
+        sum += a[row * a_columns + inner] * b[inner * b_columns + col];
     }
     out[row * b_columns + col] = sum;
-        // }
+    // }
     // }
 }
 
-void matrixmult_device(
-    const float *d_a,
-    const float *d_b,
-    float *d_out,
-    const size_t a_rows,
-    const size_t a_columns,
-    const size_t b_columns
-){
+void matrixmult_device(const float *d_a,
+                       const float *d_b,
+                       float *d_out,
+                       const size_t a_rows,
+                       const size_t a_columns,
+                       const size_t b_columns) {
     dim3 threads_per_block(16, 16);
-    dim3 blocks(
-        (unsigned)ceil_div(a_rows, threads_per_block.x),
-        (unsigned)ceil_div(b_columns, threads_per_block.y)
-    );
+    dim3 blocks((unsigned)ceil_div(a_rows, threads_per_block.x),
+                (unsigned)ceil_div(b_columns, threads_per_block.y));
 
-    mult_kernel<<<blocks, threads_per_block>>>(
-        d_a, d_b, d_out, a_rows, a_columns, b_columns
-    );
+    mult_kernel<<<blocks, threads_per_block>>>(d_a, d_b, d_out, a_rows, a_columns, b_columns);
+    CUDA_CHECK_LAUNCH();
 }
 
-void matrixmult_gpu(
-    const float *a,
-    const float *b,
-    float *out,
-    const size_t a_rows,
-    const size_t a_columns,
-    const size_t b_columns
-){
+void matrixmult_gpu(const float *a,
+                    const float *b,
+                    float *out,
+                    const size_t a_rows,
+                    const size_t a_columns,
+                    const size_t b_columns) {
     size_t a_elements = a_rows * a_columns;
     size_t b_elements = a_columns * b_columns;
     size_t out_elements = a_rows * b_columns;
@@ -74,22 +64,20 @@ void matrixmult_gpu(
     float *d_b = NULL;
     float *d_out = NULL;
 
-    cudaMalloc((void **)&d_a, a_bytes);
-    cudaMalloc((void **)&d_b, b_bytes);
-    cudaMalloc((void **)&d_out, out_bytes);
+    CUDA_CHECK(cudaMalloc((void **)&d_a, a_bytes));
+    CUDA_CHECK(cudaMalloc((void **)&d_b, b_bytes));
+    CUDA_CHECK(cudaMalloc((void **)&d_out, out_bytes));
 
-    cudaMemcpy(d_a, a, a_bytes, cudaMemcpyHostToDevice);
-    cudaMemcpy(d_b, b, b_bytes, cudaMemcpyHostToDevice);
+    CUDA_CHECK(cudaMemcpy(d_a, a, a_bytes, cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_b, b, b_bytes, cudaMemcpyHostToDevice));
 
-    matrixmult_device(
-        d_a, d_b, d_out, a_rows, a_columns, b_columns
-    );
+    matrixmult_device(d_a, d_b, d_out, a_rows, a_columns, b_columns);
 
-    cudaDeviceSynchronize();
+    CUDA_CHECK(cudaDeviceSynchronize());
 
-    cudaMemcpy(out, d_out, out_bytes, cudaMemcpyDeviceToHost);
+    CUDA_CHECK(cudaMemcpy(out, d_out, out_bytes, cudaMemcpyDeviceToHost));
 
-    cudaFree(d_a);
-    cudaFree(d_b);
-    cudaFree(d_out);
+    CUDA_CHECK(cudaFree(d_a));
+    CUDA_CHECK(cudaFree(d_b));
+    CUDA_CHECK(cudaFree(d_out));
 }

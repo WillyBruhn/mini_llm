@@ -2,15 +2,13 @@
 
 #include <math.h>
 
-void layernorm(
-    float *out,
-    const float *input,
-    const float *gamma,
-    const float *beta,
-    size_t n_tokens,
-    size_t n_embd,
-    float epsilon
-) {
+void layernorm(float *out,
+               const float *input,
+               const float *gamma,
+               const float *beta,
+               size_t n_tokens,
+               size_t n_embd,
+               float epsilon) {
     for (size_t token_index = 0; token_index < n_tokens; token_index++) {
         const float *row = input + token_index * n_embd;
         float *out_row = out + token_index * n_embd;

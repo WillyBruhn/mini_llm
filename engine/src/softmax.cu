@@ -1,16 +1,12 @@
 #include "../include/softmax.h"
+#include "../include/cuda_check.h"
 #include "../include/util.h"
 
 #include <cuda_runtime.h>
 
 #include <math.h>
 
-__global__ void softmax_kernel(
-    const float *input,
-    float *out,
-    size_t rows,
-    size_t columns
-) {
+__global__ void softmax_kernel(const float *input, float *out, size_t rows, size_t columns) {
     size_t row = blockIdx.x * blockDim.x + threadIdx.x;
     if (row >= rows) {
         return;
@@ -37,12 +33,7 @@ __global__ void softmax_kernel(
     }
 }
 
-__global__ void causal_softmax_kernel(
-    const float *input,
-    float *out,
-    size_t rows,
-    size_t columns
-) {
+__global__ void causal_softmax_kernel(const float *input, float *out, size_t rows, size_t columns) {
     size_t row = blockIdx.x * blockDim.x + threadIdx.x;
     if (row >= rows) {
         return;
@@ -74,58 +65,46 @@ __global__ void causal_softmax_kernel(
     }
 }
 
-void softmax_gpu(
-    const float *input,
-    float *out,
-    size_t rows,
-    size_t columns
-) {
+void softmax_gpu(const float *input, float *out, size_t rows, size_t columns) {
     size_t element_count = rows * columns;
     size_t bytes = element_count * sizeof(float);
     float *d_input = NULL;
     float *d_out = NULL;
 
-    cudaMalloc((void **)&d_input, bytes);
-    cudaMalloc((void **)&d_out, bytes);
-    cudaMemcpy(d_input, input, bytes, cudaMemcpyHostToDevice);
+    CUDA_CHECK(cudaMalloc((void **)&d_input, bytes));
+    CUDA_CHECK(cudaMalloc((void **)&d_out, bytes));
+    CUDA_CHECK(cudaMemcpy(d_input, input, bytes, cudaMemcpyHostToDevice));
 
     size_t threads_per_block = 256;
     size_t blocks = ceil_div(rows, threads_per_block);
-    softmax_kernel<<<blocks, threads_per_block>>>(
-        d_input, d_out, rows, columns
-    );
-    cudaDeviceSynchronize();
+    softmax_kernel<<<blocks, threads_per_block>>>(d_input, d_out, rows, columns);
+    CUDA_CHECK_LAUNCH();
+    CUDA_CHECK(cudaDeviceSynchronize());
 
-    cudaMemcpy(out, d_out, bytes, cudaMemcpyDeviceToHost);
+    CUDA_CHECK(cudaMemcpy(out, d_out, bytes, cudaMemcpyDeviceToHost));
 
-    cudaFree(d_out);
-    cudaFree(d_input);
+    CUDA_CHECK(cudaFree(d_out));
+    CUDA_CHECK(cudaFree(d_input));
 }
 
-void causal_softmax_gpu(
-    const float *input,
-    float *out,
-    size_t rows,
-    size_t columns
-) {
+void causal_softmax_gpu(const float *input, float *out, size_t rows, size_t columns) {
     size_t element_count = rows * columns;
     size_t bytes = element_count * sizeof(float);
     float *d_input = NULL;
     float *d_out = NULL;
 
-    cudaMalloc((void **)&d_input, bytes);
-    cudaMalloc((void **)&d_out, bytes);
-    cudaMemcpy(d_input, input, bytes, cudaMemcpyHostToDevice);
+    CUDA_CHECK(cudaMalloc((void **)&d_input, bytes));
+    CUDA_CHECK(cudaMalloc((void **)&d_out, bytes));
+    CUDA_CHECK(cudaMemcpy(d_input, input, bytes, cudaMemcpyHostToDevice));
 
     size_t threads_per_block = 256;
     size_t blocks = ceil_div(rows, threads_per_block);
-    causal_softmax_kernel<<<blocks, threads_per_block>>>(
-        d_input, d_out, rows, columns
-    );
-    cudaDeviceSynchronize();
+    causal_softmax_kernel<<<blocks, threads_per_block>>>(d_input, d_out, rows, columns);
+    CUDA_CHECK_LAUNCH();
+    CUDA_CHECK(cudaDeviceSynchronize());
 
-    cudaMemcpy(out, d_out, bytes, cudaMemcpyDeviceToHost);
+    CUDA_CHECK(cudaMemcpy(out, d_out, bytes, cudaMemcpyDeviceToHost));
 
-    cudaFree(d_out);
-    cudaFree(d_input);
+    CUDA_CHECK(cudaFree(d_out));
+    CUDA_CHECK(cudaFree(d_input));
 }

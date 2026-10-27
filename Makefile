@@ -31,6 +31,14 @@ test: $(BUILD)/test_runner
 gpt2-test: $(BUILD)/test_gpt2
 	./$<
 
+# Run the CPU tests with AddressSanitizer and UndefinedBehaviorSanitizer.
+# This finds out-of-bounds access, use-after-free, leaks and undefined behavior.
+sanitize-cpu: $(BUILD)/test_runner_asan
+	./$<
+
+$(BUILD)/test_runner_asan: $(TEST_SRCS) $(CPU_SRCS) $(wildcard engine/include/*.h) engine/tests/test_util.h | $(BUILD)
+	$(CC) $(CFLAGS) -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined -o $@ $(TEST_SRCS) $(CPU_SRCS) $(LDFLAGS)
+
 test-gpu: $(BUILD)/test_runner_gpu
 	./$<
 
@@ -98,11 +106,12 @@ $(BUILD)/libmini_llm.so: engine/src/vector_addition.c engine/include/vector_addi
 # --- Lint ---
 # `make check` runs every linter and does not change files.
 # `make format` fixes import order and formatting.
-check: ruff-format-check ruff-check mypy file-length semgrep-test semgrep
+check: ruff-format-check ruff-check mypy clang-format-check file-length semgrep-test semgrep
 
 format:
 	uv run --group dev ruff check --select I --fix .
 	uv run --group dev ruff format .
+	$(C_FILES) | xargs uv run --group dev clang-format -i
 
 ruff-format-check:
 	uv run --group dev ruff format --check .
@@ -110,13 +119,20 @@ ruff-format-check:
 ruff-check:
 	uv run --group dev ruff check .
 
+# C, CUDA and header files. The .semgrep test files are not real source code.
+SOURCE_GLOBS = '*.c' '*.cu' '*.h' '*.cpp'
+C_FILES = git ls-files --cached --others --exclude-standard -- $(SOURCE_GLOBS) ':!.semgrep'
+
+# Style is set in .clang-format.
+clang-format-check:
+	$(C_FILES) | xargs uv run --group dev clang-format --dry-run --Werror
+
 # Complexity limits (function complexity, arguments, branches, statements and
 # nesting) are ruff rules. See [tool.ruff.lint] in pyproject.toml.
 # No source file may be longer than MAX_FILE_LINES lines.
 MAX_FILE_LINES ?= 400
-SOURCE_GLOBS = '*.py' '*.c' '*.cu' '*.h' '*.cpp'
 file-length:
-	@git ls-files --cached --others --exclude-standard $(SOURCE_GLOBS) | xargs wc -l | \
+	@(git ls-files --cached --others --exclude-standard -- '*.py' ':!.semgrep'; $(C_FILES)) | xargs wc -l | \
 		awk -v max=$(MAX_FILE_LINES) '$$2 != "total" && $$1 > max { print $$2 ": " $$1 " lines (max " max ")"; bad = 1 } END { exit bad }'
 
 # Strict type checking (mypy --strict, set in pyproject.toml).
@@ -137,4 +153,4 @@ $(BUILD):
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: check format ruff-format-check ruff-check mypy file-length semgrep semgrep-test all test gpt2-test test-gpu sanitize-gpu pytorch-test gpu inference-lib profile-nsys profile-ncu bench bench-gpu reference weights run clean
+.PHONY: sanitize-cpu clang-format-check check format ruff-format-check ruff-check mypy file-length semgrep semgrep-test all test gpt2-test test-gpu sanitize-gpu pytorch-test gpu inference-lib profile-nsys profile-ncu bench bench-gpu reference weights run clean

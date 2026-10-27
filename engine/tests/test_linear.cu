@@ -3,13 +3,10 @@
 
 TEST(linear_gpu_matches_cpu) {
     const float input[] = {
-        1.0f, 2.0f, 3.0f,
-        4.0f, 5.0f, 6.0f,
+        1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f,
     };
     const float weights[] = {
-         7.0f,  8.0f,
-         9.0f, 10.0f,
-        11.0f, 12.0f,
+        7.0f, 8.0f, 9.0f, 10.0f, 11.0f, 12.0f,
     };
     const float bias[] = {1.0f, -2.0f};
     float cpu_out[4] = {0};

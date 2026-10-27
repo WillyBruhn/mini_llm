@@ -3,7 +3,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-
 float *load_f32_file(const char *path, size_t expected_count) {
     FILE *file = fopen(path, "rb");
     if (file == NULL) {
@@ -27,11 +26,8 @@ float *load_f32_file(const char *path, size_t expected_count) {
 
     size_t expected_bytes = expected_count * sizeof(float);
     if ((size_t)file_size != expected_bytes) {
-        fprintf(stderr,
-                "unexpected size for %s: expected %zu bytes, got %ld bytes\n",
-                path,
-                expected_bytes,
-                file_size);
+        fprintf(stderr, "unexpected size for %s: expected %zu bytes, got %ld bytes\n", path,
+                expected_bytes, file_size);
         fclose(file);
         return NULL;
     }
@@ -47,10 +43,7 @@ float *load_f32_file(const char *path, size_t expected_count) {
     fclose(file);
 
     if (values_read != expected_count) {
-        fprintf(stderr,
-                "failed to read %s: expected %zu floats, got %zu\n",
-                path,
-                expected_count,
+        fprintf(stderr, "failed to read %s: expected %zu floats, got %zu\n", path, expected_count,
                 values_read);
         free(values);
         return NULL;

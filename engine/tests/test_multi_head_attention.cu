@@ -3,19 +3,13 @@
 
 TEST(multi_head_attention_gpu_matches_cpu) {
     const float query[] = {
-        1.0f, 1.0f, 1.0f, 1.0f,
-        1.0f, 1.0f, 1.0f, 1.0f,
-        1.0f, 1.0f, 1.0f, 1.0f,
+        1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f,
     };
     const float key[] = {
-        1.0f, 1.0f, 1.0f, 1.0f,
-        1.0f, 1.0f, 1.0f, 1.0f,
-        1.0f, 1.0f, 1.0f, 1.0f,
+        1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f,
     };
     const float value[] = {
-        1.0f, 10.0f, 100.0f, 1000.0f,
-        3.0f, 20.0f, 300.0f, 2000.0f,
-        5.0f, 30.0f, 500.0f, 3000.0f,
+        1.0f, 10.0f, 100.0f, 1000.0f, 3.0f, 20.0f, 300.0f, 2000.0f, 5.0f, 30.0f, 500.0f, 3000.0f,
     };
     float cpu_out[12] = {0};
     float gpu_out[12] = {0};

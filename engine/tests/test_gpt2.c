@@ -8,28 +8,19 @@
 #define REFERENCE_DIR "engine/tests/reference_data"
 #define WEIGHTS_DIR REFERENCE_DIR "/weights"
 
-static void assert_reference_close(
-    const float *actual,
-    const float *expected,
-    size_t count,
-    float relative_tolerance,
-    float absolute_tolerance
-) {
+static void assert_reference_close(const float *actual,
+                                   const float *expected,
+                                   size_t count,
+                                   float relative_tolerance,
+                                   float absolute_tolerance) {
     for (size_t index = 0; index < count; index++) {
         float difference = fabsf(actual[index] - expected[index]);
-        float tolerance =
-            absolute_tolerance + relative_tolerance * fabsf(expected[index]);
+        float tolerance = absolute_tolerance + relative_tolerance * fabsf(expected[index]);
         if (difference > tolerance) {
-            fprintf(
-                stderr,
-                "FAIL reference mismatch at index=%zu: actual=%g expected=%g "
-                "difference=%g tolerance=%g\n",
-                index,
-                actual[index],
-                expected[index],
-                difference,
-                tolerance
-            );
+            fprintf(stderr,
+                    "FAIL reference mismatch at index=%zu: actual=%g expected=%g "
+                    "difference=%g tolerance=%g\n",
+                    index, actual[index], expected[index], difference, tolerance);
             exit(1);
         }
     }
@@ -62,45 +53,23 @@ TEST(full_gpt2_forward_matches_saved_references) {
         snprintf(path, sizeof(path), REFERENCE_DIR "/block_%02zu.bin", layer);
         float *expected = load_f32_file(path, hidden_count);
         ASSERT_TRUE(expected != NULL);
-        assert_reference_close(
-            block_outputs + layer * hidden_count,
-            expected,
-            hidden_count,
-            3e-3f,
-            3e-3f
-        );
+        assert_reference_close(block_outputs + layer * hidden_count, expected, hidden_count, 3e-3f,
+                               3e-3f);
         free(expected);
     }
 
-    float *expected_logits = load_f32_file(
-        REFERENCE_DIR "/logits_last.bin", GPT2_N_VOCAB
-    );
+    float *expected_logits = load_f32_file(REFERENCE_DIR "/logits_last.bin", GPT2_N_VOCAB);
     ASSERT_TRUE(expected_logits != NULL);
-    assert_reference_close(
-        logits + 2 * GPT2_N_VOCAB,
-        expected_logits,
-        GPT2_N_VOCAB,
-        3e-2f,
-        3e-2f
-    );
-    assert_reference_close(
-        last_logits,
-        expected_logits,
-        GPT2_N_VOCAB,
-        3e-2f,
-        3e-2f
-    );
+    assert_reference_close(logits + 2 * GPT2_N_VOCAB, expected_logits, GPT2_N_VOCAB, 3e-2f, 3e-2f);
+    assert_reference_close(last_logits, expected_logits, GPT2_N_VOCAB, 3e-2f, 3e-2f);
 
     size_t actual_next_token = 0;
     for (size_t token = 1; token < GPT2_N_VOCAB; token++) {
-        if (logits[2 * GPT2_N_VOCAB + token] >
-            logits[2 * GPT2_N_VOCAB + actual_next_token]) {
+        if (logits[2 * GPT2_N_VOCAB + token] > logits[2 * GPT2_N_VOCAB + actual_next_token]) {
             actual_next_token = token;
         }
     }
-    FILE *expected_token_file = fopen(
-        REFERENCE_DIR "/expected_next_token.txt", "r"
-    );
+    FILE *expected_token_file = fopen(REFERENCE_DIR "/expected_next_token.txt", "r");
     ASSERT_TRUE(expected_token_file != NULL);
     int expected_next_token = -1;
     ASSERT_TRUE(fscanf(expected_token_file, "%d", &expected_next_token) == 1);

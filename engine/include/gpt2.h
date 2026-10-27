@@ -24,21 +24,17 @@ void gpt2_model_free(GPT2Model *model);
 // logits is [sequence_length, GPT2_N_VOCAB]. If non-NULL, block_outputs is
 // [GPT2_N_LAYER, sequence_length, GPT2_N_EMBD].
 // Returns 1 on success and 0 for invalid input or allocation failure.
-int gpt2_forward(
-    const GPT2Model *model,
-    const int *tokens,
-    size_t sequence_length,
-    float *logits,
-    float *block_outputs
-);
+int gpt2_forward(const GPT2Model *model,
+                 const int *tokens,
+                 size_t sequence_length,
+                 float *logits,
+                 float *block_outputs);
 
 // Computes only the final token's logits into [GPT2_N_VOCAB].
-int gpt2_forward_last(
-    const GPT2Model *model,
-    const int *tokens,
-    size_t sequence_length,
-    float *logits
-);
+int gpt2_forward_last(const GPT2Model *model,
+                      const int *tokens,
+                      size_t sequence_length,
+                      float *logits);
 
 #ifdef __cplusplus
 }
