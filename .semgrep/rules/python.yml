@@ -26,3 +26,30 @@ rules:
     paths:
       exclude:
         - .venv
+
+  - id: prefer-pathlib
+    languages: [python]
+    severity: ERROR
+    message: >-
+      Use pathlib.Path instead of os / os.path / glob for file paths
+      (for example `Path(a) / b`, `.parent`, `.exists()`, `.mkdir(parents=True,
+      exist_ok=True)`, `.iterdir()`, `.glob()`, `.resolve()`).
+    pattern-either:
+      - pattern: os.path.$FUNC(...)
+      - pattern: os.makedirs(...)
+      - pattern: os.mkdir(...)
+      - pattern: os.listdir(...)
+      - pattern: os.scandir(...)
+      - pattern: os.walk(...)
+      - pattern: os.remove(...)
+      - pattern: os.unlink(...)
+      - pattern: os.rmdir(...)
+      - pattern: os.rename(...)
+      - pattern: os.replace(...)
+      - pattern: os.getcwd()
+      - pattern: os.chdir(...)
+      - pattern: glob.glob(...)
+      - pattern: glob.iglob(...)
+    paths:
+      exclude:
+        - .venv

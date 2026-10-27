@@ -11,8 +11,8 @@ Also dumps the final logits and the expected next token.
 import argparse
 import json
 import logging
-import os
 import struct
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -31,7 +31,8 @@ def main():
     parser.add_argument("--model", default="models/gpt2", help="Model directory")
     args = parser.parse_args()
 
-    os.makedirs(args.out, exist_ok=True)
+    out_dir = Path(args.out)
+    out_dir.mkdir(parents=True, exist_ok=True)
 
     logger.info(f"Loading model from {args.model}...")
     tokenizer = GPT2Tokenizer.from_pretrained(args.model)
@@ -39,13 +40,12 @@ def main():
     model.eval()
 
     # Tokenize
-    input_ids = tokenizer.encode(args.prompt, return_tensors="pt")  # not used as kwarg
     tokens = tokenizer.encode(args.prompt)
     logger.info(f"Prompt: '{args.prompt}'")
     logger.info(f"Tokens ({len(tokens)}): {tokens}")
 
     # Save token IDs
-    with open(os.path.join(args.out, "input_tokens.bin"), "wb") as f:
+    with (out_dir / "input_tokens.bin").open("wb") as f:
         f.writelines(struct.pack("<i", t) for t in tokens)
 
     # Save config
@@ -60,7 +60,7 @@ def main():
         "n_positions": model.config.n_positions,
         "n_inner": model.config.n_inner or 4 * model.config.n_embd,
     }
-    with open(os.path.join(args.out, "config.json"), "w") as f:
+    with (out_dir / "config.json").open("w") as f:
         json.dump(config, f, indent=2)
 
     # Forward pass with hooks to capture intermediates
@@ -103,18 +103,18 @@ def main():
 
     # Save all intermediates
     for name, tensor in intermediates.items():
-        path = os.path.join(args.out, f"{name}.bin")
+        path = out_dir / f"{name}.bin"
         tensor.astype(np.float32).tofile(path)
         logger.info(f"  {name}: shape={tensor.shape} → {path}")
 
     # Save logits (just the last token's logits for next-token prediction)
     last_logits = logits[0, -1, :]  # [vocab_size]
-    last_logits.astype(np.float32).tofile(os.path.join(args.out, "logits_last.bin"))
+    last_logits.astype(np.float32).tofile(out_dir / "logits_last.bin")
     logger.info(f"  logits_last: shape={last_logits.shape}")
 
     # Save full logits
     logits_full = logits[0]  # [seq_len, vocab_size]
-    logits_full.astype(np.float32).tofile(os.path.join(args.out, "logits_full.bin"))
+    logits_full.astype(np.float32).tofile(out_dir / "logits_full.bin")
     logger.info(f"  logits_full: shape={logits_full.shape}")
 
     # Next token
@@ -122,11 +122,11 @@ def main():
     next_word = tokenizer.decode([next_token])
     logger.info(f"\nNext token: {next_token} = '{next_word}'")
 
-    with open(os.path.join(args.out, "expected_next_token.txt"), "w") as f:
+    with (out_dir / "expected_next_token.txt").open("w") as f:
         f.write(f"{next_token}\n")
 
     logger.info(f"\nAll reference data saved to {args.out}/")
-    logger.info(f"Total files: {len(os.listdir(args.out))}")
+    logger.info(f"Total files: {len(list(out_dir.iterdir()))}")
 
 
 if __name__ == "__main__":

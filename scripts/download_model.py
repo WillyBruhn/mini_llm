@@ -1,7 +1,7 @@
 """Download GPT-2 Small weights to models/gpt2/."""
 
 import logging
-import os
+from pathlib import Path
 
 from huggingface_hub import snapshot_download
 
@@ -10,8 +10,8 @@ logger = logging.getLogger(__name__)
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
-    dest = os.path.join(os.path.dirname(__file__), "..", "models", "gpt2")
-    logger.info("Downloading GPT-2 Small to %s...", os.path.abspath(dest))
+    dest = Path(__file__).resolve().parent.parent / "models" / "gpt2"
+    logger.info("Downloading GPT-2 Small to %s...", dest)
     snapshot_download(
         repo_id="openai-community/gpt2",
         local_dir=dest,

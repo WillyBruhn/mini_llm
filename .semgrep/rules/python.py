@@ -1,4 +1,7 @@
+import glob
 import logging
+import os
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -54,3 +57,27 @@ def outer() -> None:
 
 # ok: no-import-inside-function
 import json  # noqa: E402
+
+
+# --- prefer-pathlib ---
+def uses_os_for_paths() -> None:
+    # ruleid: prefer-pathlib
+    os.path.join("a", "b")
+    # ruleid: prefer-pathlib
+    os.path.exists("a")
+    # ruleid: prefer-pathlib
+    os.path.dirname(__file__)
+    # ruleid: prefer-pathlib
+    os.makedirs("a", exist_ok=True)
+    # ruleid: prefer-pathlib
+    os.listdir("a")
+    # ruleid: prefer-pathlib
+    os.getcwd()
+    # ruleid: prefer-pathlib
+    glob.glob("*.py")
+    # ok: prefer-pathlib
+    os.environ.get("HOME")
+    # ok: prefer-pathlib
+    os.fsencode("a")
+    # ok: prefer-pathlib
+    Path("a") / "b"

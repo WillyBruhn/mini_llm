@@ -3,8 +3,8 @@
 import argparse
 import json
 import logging
-import os
 import re
+from pathlib import Path
 
 import torch
 from transformers import GPT2LMHeadModel
@@ -26,7 +26,8 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    os.makedirs(args.out, exist_ok=True)
+    out_dir = Path(args.out)
+    out_dir.mkdir(parents=True, exist_ok=True)
     model = GPT2LMHeadModel.from_pretrained(
         args.model,
         dtype=torch.float32,
@@ -41,14 +42,14 @@ def main() -> None:
 
             contiguous = tensor.detach().cpu().contiguous()
             filename = f"{safe_name(key)}.bin"
-            contiguous.numpy().tofile(os.path.join(args.out, filename))
+            contiguous.numpy().tofile(out_dir / filename)
             manifest[key] = {
                 "file": filename,
                 "shape": list(contiguous.shape),
                 "dtype": str(contiguous.dtype),
             }
 
-    with open(os.path.join(args.out, "manifest.json"), "w") as file:
+    with (out_dir / "manifest.json").open("w") as file:
         json.dump(manifest, file, indent=2)
 
     logger.info(f"Exported {len(manifest)} tensors to {args.out}")

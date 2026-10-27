@@ -39,7 +39,6 @@ class GPT2CustomModel:
         capture_blocks: bool = False,
     ) -> tuple[torch.Tensor, list[torch.Tensor]]:
         token_ids = token_ids.to(dtype=torch.int32, device="cpu").contiguous()
-        sequence_length = token_ids.numel()
         hidden = embedding(
             token_ids,
             self._weight("transformer.wte.weight"),

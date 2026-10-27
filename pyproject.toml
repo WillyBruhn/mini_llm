@@ -14,8 +14,20 @@ dependencies = [
 dev = [
     "ninja>=1.11,<2.0",
     "pytest>=8.0,<9.0",
+    "ruff>=0.8,<1.0",
     "semgrep>=1.100,<2.0",
 ]
 
 [tool.uv]
 default-groups = []
+
+[tool.ruff]
+src = ["pytorch/src", "scripts"]
+extend-exclude = [".semgrep", "build", "models"]
+
+[tool.ruff.lint]
+# Defaults (E4, E7, E9, F) plus isort import sorting.
+select = ["E4", "E7", "E9", "F", "I"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["mini_llm"]

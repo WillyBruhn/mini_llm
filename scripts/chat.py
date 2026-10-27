@@ -34,7 +34,9 @@ def open_request(url: str, payload: dict[str, object]):
         detail = error.read().decode("utf-8", errors="replace")
         raise RuntimeError(f"server returned HTTP {error.code}: {detail}") from error
     except URLError as error:
-        raise RuntimeError(f"could not connect to inference server: {error.reason}") from error
+        raise RuntimeError(
+            f"could not connect to inference server: {error.reason}"
+        ) from error
 
 
 def request_completion(url: str, prompt: str, max_new_tokens: int) -> dict[str, object]:
@@ -46,7 +48,9 @@ def request_completion(url: str, prompt: str, max_new_tokens: int) -> dict[str, 
     return result
 
 
-def stream_events(url: str, prompt: str, max_new_tokens: int) -> Iterator[dict[str, object]]:
+def stream_events(
+    url: str, prompt: str, max_new_tokens: int
+) -> Iterator[dict[str, object]]:
     """Yield one decoded event for each NDJSON line sent by the server."""
     payload = {"prompt": prompt, "max_new_tokens": max_new_tokens, "stream": True}
     with open_request(url, payload) as response:
@@ -98,7 +102,9 @@ def run_streaming(url: str, prompt: str, max_new_tokens: int) -> str:
     # Speed seen by the user. The first token includes the prompt pass.
     ttft = arrival_times[0]
     decode_seconds = arrival_times[-1] - ttft
-    decode_rate = (count - 1) / decode_seconds if count > 1 and decode_seconds > 0 else None
+    decode_rate = (
+        (count - 1) / decode_seconds if count > 1 and decode_seconds > 0 else None
+    )
     total = arrival_times[-1]
     status = "Interrupted after" if interrupted else "Generated"
     line = (
@@ -107,7 +113,9 @@ def run_streaming(url: str, prompt: str, max_new_tokens: int) -> str:
     )
     timings = final.get("timings")
     if isinstance(timings, dict):
-        line += f" | server decode {fmt_rate(timings.get('decode_tokens_per_s'))} tokens/s"
+        line += (
+            f" | server decode {fmt_rate(timings.get('decode_tokens_per_s'))} tokens/s"
+        )
     logger.info(line)
     return "".join(pieces)
 
@@ -122,7 +130,9 @@ def run_blocking(url: str, prompt: str, max_new_tokens: int) -> str | None:
         logger.error("Error: server returned an invalid generated-token count")
         return None
     logger.info(f"Completion: {completion}")
-    tokens_per_second = generated_tokens / elapsed_seconds if elapsed_seconds > 0 else 0.0
+    tokens_per_second = (
+        generated_tokens / elapsed_seconds if elapsed_seconds > 0 else 0.0
+    )
     logger.info(
         f"Generated {generated_tokens} token(s) in {elapsed_seconds:.2f}s "
         f"({tokens_per_second:.2f} tokens/s, end-to-end)."

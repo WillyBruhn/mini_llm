@@ -17,9 +17,7 @@ class FakeTokenizer:
         assert add_special_tokens is False
         return [1]
 
-    def decode(
-        self, token_ids: list[int], *, skip_special_tokens: bool = False
-    ) -> str:
+    def decode(self, token_ids: list[int], *, skip_special_tokens: bool = False) -> str:
         assert skip_special_tokens is True
         return "".join(" ok" for token in token_ids if token == 2)
 

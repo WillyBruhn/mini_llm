@@ -3,6 +3,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+
 from mini_llm import GPT2CustomModel
 
 REFERENCE = Path(__file__).resolve().parents[2] / "engine/tests/reference_data"
