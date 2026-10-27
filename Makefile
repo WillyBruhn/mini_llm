@@ -95,6 +95,28 @@ pytorch-test: $(BUILD)/libmini_llm.so
 $(BUILD)/libmini_llm.so: engine/src/vector_addition.c engine/include/vector_addition.h | $(BUILD)
 	$(CC) -Wall -Wextra -O2 -std=c11 -fPIC -shared -Iengine/include -o $@ engine/src/vector_addition.c
 
+# --- Lint ---
+# `make check` runs every linter and does not change files.
+# `make format` fixes import order and formatting.
+check: ruff-format-check ruff-check semgrep-test semgrep
+
+format:
+	uv run --group dev ruff check --select I --fix .
+	uv run --group dev ruff format .
+
+ruff-format-check:
+	uv run --group dev ruff format --check .
+
+ruff-check:
+	uv run --group dev ruff check .
+
+# Rules live in .semgrep/rules. `semgrep-test` checks the rules themselves.
+semgrep:
+	uv run --group dev semgrep scan --config .semgrep/rules --metrics off --disable-version-check --error .
+
+semgrep-test:
+	uv run --group dev semgrep --test --metrics off --disable-version-check .semgrep/rules
+
 # --- Utilities ---
 $(BUILD):
 	mkdir -p $(BUILD)
@@ -102,4 +124,4 @@ $(BUILD):
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all test gpt2-test test-gpu sanitize-gpu pytorch-test gpu inference-lib profile-nsys profile-ncu bench bench-gpu reference weights run clean
+.PHONY: check format ruff-format-check ruff-check semgrep semgrep-test all test gpt2-test test-gpu sanitize-gpu pytorch-test gpu inference-lib profile-nsys profile-ncu bench bench-gpu reference weights run clean

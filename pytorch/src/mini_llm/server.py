@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import logging
 import time
 from collections.abc import Iterator
 from http import HTTPStatus
@@ -10,8 +11,11 @@ from pathlib import Path
 from typing import Protocol
 
 import numpy as np
+from transformers import AutoTokenizer
 
 from .native import NativeGPT2
+
+logger = logging.getLogger(__name__)
 
 MAX_CONTEXT = 1024
 MAX_NEW_TOKENS = 32
@@ -215,7 +219,7 @@ def make_handler(service: InferenceService) -> type[BaseHTTPRequestHandler]:
             self._send_json(HTTPStatus.OK, result)
 
         def log_message(self, format: str, *args: object) -> None:
-            print(f"{self.address_string()} - {format % args}")
+            logger.info("%s - %s", self.address_string(), format % args)
 
     return Handler
 
@@ -240,21 +244,24 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
     args = parse_args()
-    from transformers import AutoTokenizer
 
-    print(f"Loading GPT-2 tokenizer from {args.model}...")
+    logger.info("Loading GPT-2 tokenizer from %s...", args.model)
     tokenizer = AutoTokenizer.from_pretrained(
         args.model, local_files_only=True, use_fast=True
     )
     engine = NativeGPT2(args.weights, args.library)
     service = InferenceService(engine, tokenizer)
     server = ThreadingHTTPServer((args.host, args.port), make_handler(service))
-    print(f"Listening on http://{args.host}:{args.port} (Ctrl+C to stop)")
+    logger.info("Listening on http://%s:%s (Ctrl+C to stop)", args.host, args.port)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
-        print("\nStopping server.")
+        logger.info("Stopping server.")
     finally:
         server.server_close()
         engine.close()

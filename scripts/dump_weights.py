@@ -2,8 +2,14 @@
 
 import argparse
 import json
+import logging
 import os
 import re
+
+import torch
+from transformers import GPT2LMHeadModel
+
+logger = logging.getLogger(__name__)
 
 
 def safe_name(key: str) -> str:
@@ -11,6 +17,7 @@ def safe_name(key: str) -> str:
 
 
 def main() -> None:
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", default="models/gpt2")
     parser.add_argument(
@@ -18,9 +25,6 @@ def main() -> None:
         default="engine/tests/reference_data/weights",
     )
     args = parser.parse_args()
-
-    import torch
-    from transformers import GPT2LMHeadModel
 
     os.makedirs(args.out, exist_ok=True)
     model = GPT2LMHeadModel.from_pretrained(
@@ -47,7 +51,7 @@ def main() -> None:
     with open(os.path.join(args.out, "manifest.json"), "w") as file:
         json.dump(manifest, file, indent=2)
 
-    print(f"Exported {len(manifest)} tensors to {args.out}")
+    logger.info(f"Exported {len(manifest)} tensors to {args.out}")
 
 
 if __name__ == "__main__":

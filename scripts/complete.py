@@ -1,10 +1,13 @@
 """Interactive completion playground backed by a local causal language model."""
 
 import argparse
+import logging
 from dataclasses import dataclass
 
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -39,7 +42,7 @@ def choose_device(requested: str) -> str:
         if cuda_supported:
             return "cuda"
         if torch.cuda.is_available():
-            print(
+            logger.info(
                 "CUDA is visible, but this PyTorch build does not support the GPU; using CPU."
             )
         return "cpu"
@@ -102,10 +105,11 @@ def complete_prompt(
 
 
 def main() -> None:
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
     args = parse_args()
     device = choose_device(args.device)
 
-    print(f"Loading {args.model} on {device}...")
+    logger.info(f"Loading {args.model} on {device}...")
     tokenizer = AutoTokenizer.from_pretrained(args.model, local_files_only=True)
     model = AutoModelForCausalLM.from_pretrained(
         args.model, local_files_only=True, dtype=torch.float32
@@ -113,13 +117,13 @@ def main() -> None:
     model.eval()
 
     history: list[Message] = []
-    print("Ready. Enter a prompt to complete. Commands: /clear, /history, /exit")
+    logger.info("Ready. Enter a prompt to complete. Commands: /clear, /history, /exit")
 
     while True:
         try:
             prompt = input("\nPrompt: ")
         except (EOFError, KeyboardInterrupt):
-            print()
+            logger.info("")
             break
 
         prompt = prompt.rstrip()
@@ -129,12 +133,12 @@ def main() -> None:
             break
         if prompt == "/clear":
             history.clear()
-            print("History cleared.")
+            logger.info("History cleared.")
             continue
         if prompt == "/history":
             for index, message in enumerate(history, start=1):
-                print(f"\n[{index}] Prompt: {message.prompt}")
-                print(f"[{index}] Completion:{message.completion}")
+                logger.info(f"\n[{index}] Prompt: {message.prompt}")
+                logger.info(f"[{index}] Completion:{message.completion}")
             continue
 
         completion = complete_prompt(
@@ -147,7 +151,7 @@ def main() -> None:
             device,
         )
         history.append(Message(prompt, completion))
-        print(f"Completion:{completion}")
+        logger.info(f"Completion:{completion}")
 
 
 if __name__ == "__main__":

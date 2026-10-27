@@ -1,0 +1,5 @@
+# Rule test files contain deliberate violations.
+.semgrep/
+.venv/
+build/
+models/

@@ -2,11 +2,21 @@
 
 import argparse
 import json
+import logging
+import sys
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+
+logger = logging.getLogger(__name__)
+
+
+def write_stream(text: str) -> None:
+    """Write text without a newline and flush. Used to show streamed tokens."""
+    sys.stdout.write(text)
+    sys.stdout.flush()
 
 
 @contextmanager
@@ -64,7 +74,7 @@ def run_streaming(url: str, prompt: str, max_new_tokens: int) -> str:
     final: dict[str, object] = {}
     interrupted = False
 
-    print("Completion: ", end="", flush=True)
+    write_stream("Completion: ")
     events = stream_events(url, prompt, max_new_tokens)
     try:
         for event in events:
@@ -74,16 +84,16 @@ def run_streaming(url: str, prompt: str, max_new_tokens: int) -> str:
             arrival_times.append(time.perf_counter() - started)
             piece = str(event.get("token", ""))
             pieces.append(piece)
-            print(piece, end="", flush=True)
+            write_stream(piece)
     except KeyboardInterrupt:
         interrupted = True
     finally:
         events.close()  # Close the connection. The server stops generation.
-    print()
+    write_stream("\n")
 
     count = len(arrival_times)
     if count == 0:
-        print("No tokens received.")
+        logger.info("No tokens received.")
         return ""
     # Speed seen by the user. The first token includes the prompt pass.
     ttft = arrival_times[0]
@@ -98,7 +108,7 @@ def run_streaming(url: str, prompt: str, max_new_tokens: int) -> str:
     timings = final.get("timings")
     if isinstance(timings, dict):
         line += f" | server decode {fmt_rate(timings.get('decode_tokens_per_s'))} tokens/s"
-    print(line)
+    logger.info(line)
     return "".join(pieces)
 
 
@@ -109,11 +119,11 @@ def run_blocking(url: str, prompt: str, max_new_tokens: int) -> str | None:
     completion = str(result.get("completion", ""))
     generated_tokens = result.get("generated_tokens", 0)
     if isinstance(generated_tokens, bool) or not isinstance(generated_tokens, int):
-        print("Error: server returned an invalid generated-token count")
+        logger.error("Error: server returned an invalid generated-token count")
         return None
-    print(f"Completion: {completion}")
+    logger.info(f"Completion: {completion}")
     tokens_per_second = generated_tokens / elapsed_seconds if elapsed_seconds > 0 else 0.0
-    print(
+    logger.info(
         f"Generated {generated_tokens} token(s) in {elapsed_seconds:.2f}s "
         f"({tokens_per_second:.2f} tokens/s, end-to-end)."
     )
@@ -130,14 +140,15 @@ def main() -> None:
         help="Wait for the full completion instead of printing tokens as they arrive",
     )
     args = parser.parse_args()
+    logging.basicConfig(level=logging.INFO, stream=sys.stdout, format="%(message)s")
 
     history: list[tuple[str, str]] = []
-    print("Connected to mini_llm. Commands: /history, /clear, /exit")
+    logger.info("Connected to mini_llm. Commands: /history, /clear, /exit")
     while True:
         try:
             prompt = input("\nPrompt: ").strip()
         except (EOFError, KeyboardInterrupt):
-            print()
+            write_stream("\n")
             break
         if not prompt:
             continue
@@ -145,12 +156,12 @@ def main() -> None:
             break
         if prompt == "/clear":
             history.clear()
-            print("History cleared.")
+            logger.info("History cleared.")
             continue
         if prompt == "/history":
             for index, (old_prompt, completion) in enumerate(history, start=1):
-                print(f"\n[{index}] Prompt: {old_prompt}")
-                print(f"[{index}] Completion: {completion}")
+                logger.info(f"\n[{index}] Prompt: {old_prompt}")
+                logger.info(f"[{index}] Completion: {completion}")
             continue
 
         try:
@@ -159,7 +170,7 @@ def main() -> None:
             else:
                 completion = run_streaming(args.url, prompt, args.max_new_tokens)
         except RuntimeError as error:
-            print(f"\nError: {error}")
+            logger.error(f"\nError: {error}")
             continue
         if completion is not None:
             history.append((prompt, completion))
