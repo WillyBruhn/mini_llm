@@ -67,15 +67,37 @@ GPT-2 Small (124M params)
 - [ ] Set up test harness: compare C outputs against PyTorch reference
 
 ### Phase 1: CPU Forward Pass
-- [ ] Token + position embedding lookup
-- [ ] LayerNorm
-- [ ] Linear projection (matmul + bias) — the workhorse
-- [ ] Multi-head attention with causal mask
-- [ ] GELU activation
-- [ ] Full single-block forward pass
-- [ ] Stack 12 blocks, verify against PyTorch for same input
-- [ ] Greedy token generation (argmax loop)
+- [x] Token + position embedding lookup
+- [x] LayerNorm
+- [x] Linear projection (matmul + bias) — the workhorse
+- [x] Multi-head attention with causal mask
+- [x] GELU activation
+- [x] Full single-block forward pass
+- [x] Stack 12 blocks, verify against PyTorch for same input
+- [x] Greedy token generation (argmax loop)
 - [ ] Benchmark: measure tokens/sec and time per layer
+
+The native C full-model API is declared in `engine/include/gpt2.h`. It loads
+GPT-2 Small raw float32 tensors exported by `scripts/dump_weights.py`; pass the
+exported weights directory to `gpt2_model_load`, then call `gpt2_forward`.
+Optional block outputs and final logits are checked against the saved
+PyTorch references by `make gpt2-test` (after running `make weights`).
+
+### Local inference server
+
+Build the C shared library and export GPT-2 weights, then run the local server
+and terminal client in separate terminals:
+
+```sh
+make inference-lib weights
+uv run scripts/serve.py
+uv run scripts/chat.py
+```
+
+The server defaults to `127.0.0.1:8000`. `GET /health` reports readiness and
+`POST /generate` accepts `{"prompt":"Hello","max_new_tokens":8}`. Generation is
+greedy and runs on CPU; each generated token recomputes the prompt without a KV
+cache, so keep `max_new_tokens` small until inference is optimized.
 
 ### Phase 2: Tokenizer
 - [ ] Implement BPE tokenizer (GPT-2 uses byte-level BPE)

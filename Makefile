@@ -10,7 +10,7 @@ CUDA_SANITIZER ?= /usr/local/cuda-12.6
 # Source files
 CPU_SRCS = $(wildcard engine/src/*.c)
 CPU_OBJS = $(patsubst engine/src/%.c,$(BUILD)/%.o,$(CPU_SRCS))
-TEST_SRCS = $(wildcard engine/tests/test_*.c)
+TEST_SRCS = $(filter-out engine/tests/test_gpt2.c,$(wildcard engine/tests/test_*.c))
 CUDA_SRCS = $(wildcard engine/src/*.cu)
 GPU_TEST_SRCS = $(wildcard engine/tests/test_*.cu)
 
@@ -28,6 +28,9 @@ $(BUILD)/%.o: engine/src/%.c | $(BUILD)
 test: $(BUILD)/test_runner
 	./$<
 
+gpt2-test: $(BUILD)/test_gpt2
+	./$<
+
 test-gpu: $(BUILD)/test_runner_gpu
 	./$<
 
@@ -38,6 +41,9 @@ sanitize-gpu: $(BUILD)/test_runner_gpu_debug
 
 $(BUILD)/test_runner: $(TEST_SRCS) engine/tests/test_util.h $(filter-out $(BUILD)/main.o,$(CPU_OBJS)) | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ $(TEST_SRCS) $(filter-out $(BUILD)/main.o,$(CPU_OBJS)) $(LDFLAGS)
+
+$(BUILD)/test_gpt2: engine/tests/test_gpt2.c engine/tests/test_util.h $(filter-out $(BUILD)/main.o,$(CPU_OBJS)) | $(BUILD)
+	$(CC) $(CFLAGS) -o $@ engine/tests/test_gpt2.c $(filter-out $(BUILD)/main.o,$(CPU_OBJS)) $(LDFLAGS)
 
 $(BUILD)/test_runner_gpu: $(GPU_TEST_SRCS) $(CUDA_SRCS) engine/tests/test_util.h $(filter-out $(BUILD)/main.o,$(CPU_OBJS)) | $(BUILD)
 	$(NVCC) $(NVFLAGS) -o $@ $(GPU_TEST_SRCS) $(CUDA_SRCS) $(filter-out $(BUILD)/main.o,$(CPU_OBJS)) $(LDFLAGS)
@@ -75,6 +81,11 @@ reference:
 weights:
 	uv run scripts/dump_weights.py
 
+inference-lib: $(BUILD)/libmini_llm_inference.so
+
+$(BUILD)/libmini_llm_inference.so: $(CPU_SRCS) $(wildcard engine/include/*.h) | $(BUILD)
+	$(CC) $(CFLAGS) -fPIC -shared -o $@ $(CPU_SRCS) $(LDFLAGS)
+
 run: $(BUILD)/mini_llm
 	./$<
 
@@ -91,4 +102,4 @@ $(BUILD):
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all test test-gpu sanitize-gpu pytorch-test gpu profile-nsys profile-ncu bench bench-gpu reference weights run clean
+.PHONY: all test gpt2-test test-gpu sanitize-gpu pytorch-test gpu inference-lib profile-nsys profile-ncu bench bench-gpu reference weights run clean

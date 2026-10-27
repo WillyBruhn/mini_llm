@@ -13,5 +13,11 @@
     "files.insertFinalNewline": true,
     "python.analysis.extraPaths": [
         "${workspaceFolder}/pytorch/src"
-    ]
+    ],
+    "chat.tools.terminal.autoApprove": {
+        "/^make test$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
+    }
 }
