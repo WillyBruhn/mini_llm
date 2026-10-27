@@ -121,3 +121,29 @@ sys.path = ["/some/dir"]
 sys.path += ["/some/dir"]
 # ok: no-sys-path-manipulation
 print_path = list(sys.path)
+
+
+# --- no-private-import ---
+# ruleid: no-private-import
+from mini_llm.sibling import _helper
+# ruleid: no-private-import
+from mini_llm.sibling import name, _helper
+# ruleid: no-private-import
+from mini_llm.sibling import _helper as helper
+# ruleid: no-private-import
+from mini_llm.sibling import (
+    name_a,
+    _helper,
+)
+# ruleid: no-private-import
+from mini_llm._internal import name
+# ruleid: no-private-import
+import mini_llm._internal
+# ok: no-private-import
+from mini_llm.sibling import name
+# ok: no-private-import
+from mini_llm.sibling import name as _alias
+# ok: no-private-import
+from mini_llm.sibling import __version__
+# ok: no-private-import
+from __future__ import annotations

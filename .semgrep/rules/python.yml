@@ -96,3 +96,22 @@ rules:
     paths:
       exclude:
         - .venv
+
+  - id: no-private-import
+    languages: [python]
+    severity: ERROR
+    message: >-
+      Do not import private names or private modules (names that start with
+      a single underscore). Use the public API instead, or remove the leading
+      underscore if the name must be shared. Dunder names such as
+      `__version__` are allowed.
+    pattern-either:
+      - patterns:
+          - pattern: from $MODULE import $NAME
+          - metavariable-regex:
+              metavariable: $NAME
+              regex: ^_(?!_)
+      - pattern-regex: (?m)^[ \t]*from[ \t]+(\w+\.)*_(?!_)\w*(\.\w+)*[ \t]+import\b
+    paths:
+      exclude:
+        - .venv
