@@ -1,7 +1,9 @@
 #include "../include/gpu_timer.h"
 #include "../include/cuda_check.h"
 
+#include <cuda_profiler_api.h>
 #include <cuda_runtime.h>
+#include <nvtx3/nvToolsExt.h>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -25,6 +27,14 @@ static const char *const STAGE_NAMES[GPU_STAGE_COUNT] = {
 
 const char *gpu_stage_name(GpuStage stage) {
     return STAGE_NAMES[stage];
+}
+
+void gpu_profiler_start(void) {
+    CUDA_CHECK(cudaProfilerStart());
+}
+
+void gpu_profiler_stop(void) {
+    CUDA_CHECK(cudaProfilerStop());
 }
 
 GpuTimer *gpu_timer_create(void) {
@@ -52,6 +62,14 @@ void gpu_timer_free(GpuTimer *timer) {
 }
 
 void gpu_timer_begin(GpuTimer *timer, GpuStage stage, int layer) {
+    char range_name[64];
+    if (layer >= 0) {
+        snprintf(range_name, sizeof(range_name), "L%02d %s", layer, STAGE_NAMES[stage]);
+    } else {
+        snprintf(range_name, sizeof(range_name), "%s", STAGE_NAMES[stage]);
+    }
+    nvtxRangePushA(range_name);
+
     if (timer == NULL) {
         return;
     }
@@ -67,6 +85,7 @@ void gpu_timer_begin(GpuTimer *timer, GpuStage stage, int layer) {
 }
 
 void gpu_timer_end(GpuTimer *timer) {
+    nvtxRangePop();
     if (timer == NULL || !timer->span_is_open) {
         return;
     }

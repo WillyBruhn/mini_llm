@@ -17,3 +17,4 @@ engine/tests/reference_data/*.bin
 engine/tests/reference_data/weights/*.bin
 
 
+.local/

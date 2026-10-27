@@ -35,10 +35,19 @@ typedef struct GpuTimer GpuTimer;
 
 const char *gpu_stage_name(GpuStage stage);
 
+// Starts and stops the capture of nsys and ncu, when they run with
+// `--capture-range=cudaProfilerApi` or `--profile-from-start off`.
+// This keeps model loading and warm-up out of the profile.
+void gpu_profiler_start(void);
+void gpu_profiler_stop(void);
+
 GpuTimer *gpu_timer_create(void);
 void gpu_timer_free(GpuTimer *timer);
 
-// Mark the start and the end of one stage on the GPU stream. layer is the
+// Mark the start and the end of one stage on the GPU stream. The stage also
+// becomes an NVTX range (for example "L03 attention"), which shows up in the
+// nsys timeline. This happens even when timer is NULL, and it costs almost
+// nothing when no profiler is attached. layer is the
 // transformer layer index, or -1 when the stage is not part of a layer.
 // All functions accept timer == NULL and then do nothing. This keeps the
 // model code free of "if (timer)" checks.

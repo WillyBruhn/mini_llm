@@ -91,14 +91,22 @@ bench-cpu: $(BUILD)/bench
 	./$< --backend cpu --prompt-tokens 8 --decode-tokens 4 --warmup 0 --runs 3 $(BENCH_ARGS)
 
 # --- Profiling ---
-# A short run: the profilers add a lot of overhead per kernel.
-PROFILE_ARGS ?= --backend gpu --prompt-tokens 32 --decode-tokens 0 --warmup 1 --runs 2 --no-check
+# See .local/profiling.md. --profile limits the capture to the timed runs.
+# A short run is enough: the profilers slow every kernel down.
+PROFILE_ARGS ?= --backend gpu --prompt-tokens 32 --decode-tokens 0 --warmup 1 --runs 2 --no-check --profile
+NSYS_FLAGS = --trace=cuda,nvtx --capture-range=cudaProfilerApi --capture-range-end=stop --force-overwrite=true
+# The ncu in /usr/bin is too old for the driver on this machine.
+NCU ?= /usr/local/cuda/bin/ncu
+KERNEL ?= multi_head_attention_kernel
 
+# Timeline of the whole run. Writes build/report.nsys-rep. Open it in the Nsight Systems GUI.
 profile-nsys: $(BUILD)/bench
-	CUDA_VISIBLE_DEVICES=$(GPU) nsys profile --stats=true --force-overwrite=true -o $(BUILD)/report ./$< $(PROFILE_ARGS)
+	CUDA_VISIBLE_DEVICES=$(GPU) nsys profile $(NSYS_FLAGS) --stats=true -o $(BUILD)/report ./$< $(PROFILE_ARGS)
 
+# Deep look at ONE kernel (the first launch that matches KERNEL).
+# Example: make profile-ncu KERNEL=mult_kernel
 profile-ncu: $(BUILD)/bench
-	CUDA_VISIBLE_DEVICES=$(GPU) ncu --set full --force-overwrite -o $(BUILD)/ncu_report ./$< $(PROFILE_ARGS)
+	CUDA_VISIBLE_DEVICES=$(GPU) $(NCU) --set full --profile-from-start off -k regex:$(KERNEL) -c 1 --force-overwrite -o $(BUILD)/ncu_$(KERNEL) ./$< $(PROFILE_ARGS)
 
 # --- Reference data for testing ---
 reference:

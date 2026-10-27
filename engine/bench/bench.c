@@ -37,6 +37,7 @@ typedef struct {
     int warmup;
     int runs;
     int check;
+    int profile;
 } Options;
 
 typedef struct {
@@ -98,13 +99,15 @@ static void make_prompt(int *tokens, size_t count) {
 }
 
 static int parse_options(int argc, char **argv, Options *options) {
-    Options defaults = {"gpu", DEFAULT_WEIGHTS, NULL, 32, 16, 2, 5, 1};
+    Options defaults = {"gpu", DEFAULT_WEIGHTS, NULL, 32, 16, 2, 5, 1, 0};
     *options = defaults;
     for (int index = 1; index < argc; index++) {
         const char *name = argv[index];
         int has_value = index + 1 < argc;
         if (strcmp(name, "--no-check") == 0) {
             options->check = 0;
+        } else if (strcmp(name, "--profile") == 0) {
+            options->profile = 1;
         } else if (!has_value) {
             fprintf(stderr, "missing value for %s\n", name);
             return 0;
@@ -167,10 +170,18 @@ static Stats measure_prefill(const Backend *backend, const Options *options, con
     for (int run = 0; run < options->warmup; run++) {
         run_forward(backend, prompt, options->prompt_tokens, logits, NULL);
     }
+    // With --profile only the timed runs are captured by nsys and ncu.
+    int capture = options->profile && backend->gpu_model != NULL;
+    if (capture) {
+        gpu_profiler_start();
+    }
     for (int run = 0; run < options->runs; run++) {
         double start = now_ms();
         run_forward(backend, prompt, options->prompt_tokens, logits, NULL);
         samples[run] = now_ms() - start;
+    }
+    if (capture) {
+        gpu_profiler_stop();
     }
     Stats stats = compute_stats(samples, options->runs);
     free(logits);
