@@ -2,6 +2,8 @@
 
 import argparse
 import json
+import time
+from collections.abc import Iterator
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -34,7 +36,7 @@ class InferenceService:
         self.engine = engine
         self.tokenizer = tokenizer
 
-    def generate(self, prompt: str, max_new_tokens: int) -> dict[str, object]:
+    def _prepare(self, prompt: object, max_new_tokens: object) -> list[int]:
         if not isinstance(prompt, str) or not prompt.strip():
             raise ValueError("prompt must be a non-empty string")
         if (
@@ -47,26 +49,83 @@ class InferenceService:
         tokens = self.tokenizer.encode(prompt, add_special_tokens=False)
         if not tokens:
             raise ValueError("prompt did not produce any tokens")
-        tokens = tokens[-(MAX_CONTEXT - max_new_tokens) :]
+        return tokens[-(MAX_CONTEXT - max_new_tokens) :]
+
+    def generate_stream(
+        self, prompt: object, max_new_tokens: object
+    ) -> Iterator[dict[str, object]]:
+        """Validate the request, then return an iterator of events.
+
+        Validation runs now, so ValueError is raised before the first event.
+        Each token event is {"token": text, "token_id": id, "t": seconds}.
+        The last event has "done": true, the full completion, and timings.
+        """
+        tokens = self._prepare(prompt, max_new_tokens)
+        assert isinstance(max_new_tokens, int)
+        return self._stream(tokens, max_new_tokens)
+
+    def _stream(
+        self, tokens: list[int], max_new_tokens: int
+    ) -> Iterator[dict[str, object]]:
         prompt_token_count = len(tokens)
         generated: list[int] = []
+        token_times: list[float] = []
+        emitted_chars = 0
+        started = time.perf_counter()
 
         for _ in range(max_new_tokens):
             input_ids = np.asarray(tokens, dtype=np.int32)
             logits = self.engine.forward_last(input_ids)
             next_token = int(np.argmax(logits))
+            now = time.perf_counter() - started
             generated.append(next_token)
+            token_times.append(now)
+
+            # A multi-byte character can span several tokens. Decode the whole
+            # list and hold back text that ends with a replacement character.
+            text = self.tokenizer.decode(generated, skip_special_tokens=True)
+            if text.endswith("\ufffd"):
+                delta = ""
+            else:
+                delta = text[emitted_chars:]
+                emitted_chars = len(text)
+            yield {"token": delta, "token_id": next_token, "t": now}
+
             if next_token == self.tokenizer.eos_token_id:
                 break
             tokens.append(next_token)
 
-        return {
-            "completion": self.tokenizer.decode(
-                generated, skip_special_tokens=True
-            ),
-            "generated_tokens": len(generated),
+        completion = self.tokenizer.decode(generated, skip_special_tokens=True)
+        total = time.perf_counter() - started
+        count = len(generated)
+        ttft = token_times[0]
+        decode_seconds = token_times[-1] - ttft
+        yield {
+            "done": True,
+            "completion": completion,
+            "generated_tokens": count,
             "prompt_tokens": prompt_token_count,
+            "timings": {
+                "ttft_s": ttft,
+                "decode_s": decode_seconds,
+                "total_s": total,
+                # Tokens after the first one, divided by the time they took.
+                "decode_tokens_per_s": (
+                    (count - 1) / decode_seconds
+                    if count > 1 and decode_seconds > 0
+                    else None
+                ),
+                "tokens_per_s": count / total if total > 0 else None,
+            },
         }
+
+    def generate(self, prompt: object, max_new_tokens: object) -> dict[str, object]:
+        final: dict[str, object] = {}
+        for event in self.generate_stream(prompt, max_new_tokens):
+            if event.get("done"):
+                final = event
+        final.pop("done", None)
+        return final
 
 
 def make_handler(service: InferenceService) -> type[BaseHTTPRequestHandler]:
@@ -78,6 +137,30 @@ def make_handler(service: InferenceService) -> type[BaseHTTPRequestHandler]:
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+
+        def _send_stream(self, events: Iterator[dict[str, object]]) -> None:
+            """Send events as NDJSON. The connection closes to end the body."""
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.close_connection = True
+            try:
+                try:
+                    for event in events:
+                        self.wfile.write(json.dumps(event).encode("utf-8") + b"\n")
+                        self.wfile.flush()
+                except (RuntimeError, MemoryError) as error:
+                    # The status line is sent already, so report in the stream.
+                    error_event = {"error": f"inference failed: {error}"}
+                    self.wfile.write(json.dumps(error_event).encode("utf-8") + b"\n")
+                    self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError):
+                # The client left. Stop generation.
+                close = getattr(events, "close", None)
+                if close:
+                    close()
 
         def do_GET(self) -> None:
             if self.path == "/health":
@@ -114,6 +197,11 @@ def make_handler(service: InferenceService) -> type[BaseHTTPRequestHandler]:
                     raise ValueError("request body must be a JSON object")
                 prompt = request.get("prompt")
                 max_new_tokens = request.get("max_new_tokens", DEFAULT_NEW_TOKENS)
+                if request.get("stream", False) is True:
+                    # Validation runs here, before any header is sent.
+                    events = service.generate_stream(prompt, max_new_tokens)
+                    self._send_stream(events)
+                    return
                 result = service.generate(prompt, max_new_tokens)
             except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as error:
                 self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
