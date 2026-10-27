@@ -3,11 +3,29 @@
 import argparse
 import logging
 from dataclasses import dataclass
+from typing import Protocol, cast
 
 import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import (
+    AutoModelForCausalLM,
+    AutoTokenizer,
+    PretrainedConfig,
+    PreTrainedTokenizerBase,
+)
 
 logger = logging.getLogger(__name__)
+
+
+class CausalLM(Protocol):
+    """The parts of a transformers causal LM that this script uses."""
+
+    config: PretrainedConfig
+
+    def generate(self, **kwargs: object) -> torch.Tensor: ...
+
+    def to(self, device: str) -> object: ...
+
+    def eval(self) -> object: ...
 
 
 @dataclass
@@ -63,18 +81,20 @@ def cuda_is_supported() -> bool:
     return not supported_arches or device_arch in supported_arches
 
 
-def trim_prompt(prompt: str, tokenizer, max_input_tokens: int) -> str:
+def trim_prompt(
+    prompt: str, tokenizer: PreTrainedTokenizerBase, max_input_tokens: int
+) -> str:
     token_ids = tokenizer(prompt, return_tensors="pt")["input_ids"][0]
     if token_ids.shape[-1] <= max_input_tokens:
         return prompt
 
     token_ids = token_ids[-max_input_tokens:]
-    return tokenizer.decode(token_ids, skip_special_tokens=True)
+    return str(tokenizer.decode(token_ids, skip_special_tokens=True))
 
 
 def complete_prompt(
-    model,
-    tokenizer,
+    model: CausalLM,
+    tokenizer: PreTrainedTokenizerBase,
     prompt: str,
     max_new_tokens: int,
     temperature: float,
@@ -101,7 +121,7 @@ def complete_prompt(
         output = model.generate(**inputs, **generation_args)
 
     generated = output[0, inputs["input_ids"].shape[-1] :]
-    return tokenizer.decode(generated, skip_special_tokens=True)
+    return str(tokenizer.decode(generated, skip_special_tokens=True))
 
 
 def main() -> None:
@@ -110,10 +130,16 @@ def main() -> None:
     device = choose_device(args.device)
 
     logger.info(f"Loading {args.model} on {device}...")
-    tokenizer = AutoTokenizer.from_pretrained(args.model, local_files_only=True)
-    model = AutoModelForCausalLM.from_pretrained(
-        args.model, local_files_only=True, dtype=torch.float32
-    ).to(device)
+    tokenizer: PreTrainedTokenizerBase = AutoTokenizer.from_pretrained(  # type: ignore[no-untyped-call]
+        args.model, local_files_only=True
+    )
+    model = cast(
+        CausalLM,
+        AutoModelForCausalLM.from_pretrained(
+            args.model, local_files_only=True, dtype=torch.float32
+        ),
+    )
+    model.to(device)
     model.eval()
 
     history: list[Message] = []

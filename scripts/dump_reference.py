@@ -12,16 +12,19 @@ import argparse
 import json
 import logging
 import struct
+from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
+import numpy.typing as npt
 import torch
+from torch import nn
 from transformers import GPT2LMHeadModel, GPT2Tokenizer
 
 logger = logging.getLogger(__name__)
 
 
-def main():
+def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     parser = argparse.ArgumentParser()
     parser.add_argument("--prompt", default="Hello, world", help="Input prompt")
@@ -45,8 +48,8 @@ def main():
     logger.info(f"Tokens ({len(tokens)}): {tokens}")
 
     # Save token IDs
-    with (out_dir / "input_tokens.bin").open("wb") as f:
-        f.writelines(struct.pack("<i", t) for t in tokens)
+    with (out_dir / "input_tokens.bin").open("wb") as tokens_file:
+        tokens_file.writelines(struct.pack("<i", t) for t in tokens)
 
     # Save config
     config = {
@@ -60,15 +63,21 @@ def main():
         "n_positions": model.config.n_positions,
         "n_inner": model.config.n_inner or 4 * model.config.n_embd,
     }
-    with (out_dir / "config.json").open("w") as f:
-        json.dump(config, f, indent=2)
+    with (out_dir / "config.json").open("w") as config_file:
+        json.dump(config, config_file, indent=2)
 
     # Forward pass with hooks to capture intermediates
     input_tensor = torch.tensor([tokens], dtype=torch.long)
-    intermediates = {}
+    intermediates: dict[str, npt.NDArray[np.float32]] = {}
 
-    def make_hook(name):
-        def hook(module, input, output):
+    def make_hook(
+        name: str,
+    ) -> Callable[[nn.Module, object, torch.Tensor | tuple[torch.Tensor, ...]], None]:
+        def hook(
+            module: nn.Module,
+            input: object,
+            output: torch.Tensor | tuple[torch.Tensor, ...],
+        ) -> None:
             if isinstance(output, tuple):
                 intermediates[name] = output[0].detach().numpy()
             else:
@@ -122,8 +131,8 @@ def main():
     next_word = tokenizer.decode([next_token])
     logger.info(f"\nNext token: {next_token} = '{next_word}'")
 
-    with (out_dir / "expected_next_token.txt").open("w") as f:
-        f.write(f"{next_token}\n")
+    with (out_dir / "expected_next_token.txt").open("w") as token_file:
+        token_file.write(f"{next_token}\n")
 
     logger.info(f"\nAll reference data saved to {args.out}/")
     logger.info(f"Total files: {len(list(out_dir.iterdir()))}")

@@ -5,8 +5,9 @@ import json
 import logging
 import sys
 import time
-from collections.abc import Iterator
+from collections.abc import Generator, Iterator
 from contextlib import contextmanager
+from http.client import HTTPResponse
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -20,7 +21,7 @@ def write_stream(text: str) -> None:
 
 
 @contextmanager
-def open_request(url: str, payload: dict[str, object]):
+def open_request(url: str, payload: dict[str, object]) -> Iterator[HTTPResponse]:
     request = Request(
         f"{url.rstrip('/')}/generate",
         data=json.dumps(payload).encode("utf-8"),
@@ -50,7 +51,7 @@ def request_completion(url: str, prompt: str, max_new_tokens: int) -> dict[str, 
 
 def stream_events(
     url: str, prompt: str, max_new_tokens: int
-) -> Iterator[dict[str, object]]:
+) -> Generator[dict[str, object], None, None]:
     """Yield one decoded event for each NDJSON line sent by the server."""
     payload = {"prompt": prompt, "max_new_tokens": max_new_tokens, "stream": True}
     with open_request(url, payload) as response:
@@ -169,9 +170,9 @@ def main() -> None:
             logger.info("History cleared.")
             continue
         if prompt == "/history":
-            for index, (old_prompt, completion) in enumerate(history, start=1):
+            for index, (old_prompt, old_completion) in enumerate(history, start=1):
                 logger.info(f"\n[{index}] Prompt: {old_prompt}")
-                logger.info(f"[{index}] Completion: {completion}")
+                logger.info(f"[{index}] Completion: {old_completion}")
             continue
 
         try:

@@ -14,6 +14,28 @@ class _VectorAdditionExtension(Protocol):
 
     def transformer_block(self, *args: object) -> torch.Tensor: ...
 
+    def embedding(self, *args: object) -> torch.Tensor: ...
+
+    def layer_norm(self, *args: object) -> torch.Tensor: ...
+
+    def gelu_new(self, input: torch.Tensor) -> torch.Tensor: ...
+
+    def linear(
+        self, input: torch.Tensor, weights: torch.Tensor, bias: torch.Tensor
+    ) -> torch.Tensor: ...
+
+    def softmax(self, input: torch.Tensor) -> torch.Tensor: ...
+
+    def causal_softmax(self, input: torch.Tensor) -> torch.Tensor: ...
+
+    def attention(
+        self,
+        query: torch.Tensor,
+        key: torch.Tensor,
+        value: torch.Tensor,
+        n_heads: int,
+    ) -> torch.Tensor: ...
+
 
 _project_root = Path(__file__).resolve().parents[3]
 _extension = cast(

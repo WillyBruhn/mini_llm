@@ -98,7 +98,7 @@ $(BUILD)/libmini_llm.so: engine/src/vector_addition.c engine/include/vector_addi
 # --- Lint ---
 # `make check` runs every linter and does not change files.
 # `make format` fixes import order and formatting.
-check: ruff-format-check ruff-check semgrep-test semgrep
+check: ruff-format-check ruff-check mypy semgrep-test semgrep
 
 format:
 	uv run --group dev ruff check --select I --fix .
@@ -109,6 +109,10 @@ ruff-format-check:
 
 ruff-check:
 	uv run --group dev ruff check .
+
+# Strict type checking (mypy --strict, set in pyproject.toml).
+mypy:
+	uv run --group dev mypy
 
 # Rules live in .semgrep/rules. `semgrep-test` checks the rules themselves.
 semgrep:
@@ -124,4 +128,4 @@ $(BUILD):
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: check format ruff-format-check ruff-check semgrep semgrep-test all test gpt2-test test-gpu sanitize-gpu pytorch-test gpu inference-lib profile-nsys profile-ncu bench bench-gpu reference weights run clean
+.PHONY: check format ruff-format-check ruff-check mypy semgrep semgrep-test all test gpt2-test test-gpu sanitize-gpu pytorch-test gpu inference-lib profile-nsys profile-ncu bench bench-gpu reference weights run clean

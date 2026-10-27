@@ -8,7 +8,9 @@ from mini_llm.vector_addition import embedding, layer_norm, linear, transformer_
 
 
 class GPT2CustomModel:
-    def __init__(self, weights: dict[str, torch.Tensor], config: dict[str, int]):
+    def __init__(
+        self, weights: dict[str, torch.Tensor], config: dict[str, int]
+    ) -> None:
         self.weights = weights
         self.config = config
         self.zero_bias = torch.zeros(config["n_vocab"], dtype=torch.float32)

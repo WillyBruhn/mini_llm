@@ -1,6 +1,8 @@
 import json
 import threading
+from collections.abc import Iterator
 from http.server import HTTPServer
+from typing import Any
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
@@ -30,7 +32,7 @@ class FakeEngine:
 
 
 @pytest.fixture
-def server_url():
+def server_url() -> Iterator[str]:
     service = InferenceService(FakeEngine(), FakeTokenizer())
     server = HTTPServer(("127.0.0.1", 0), make_handler(service))
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -65,7 +67,9 @@ def test_health_and_generation_endpoints(server_url: str) -> None:
     assert timings["total_s"] >= timings["ttft_s"]
 
 
-def _stream(server_url: str, body: dict) -> tuple[int, str, list[dict]]:
+def _stream(
+    server_url: str, body: dict[str, object]
+) -> tuple[int, str, list[dict[str, Any]]]:
     request = Request(
         f"{server_url}/generate",
         data=json.dumps(body).encode(),
@@ -109,7 +113,7 @@ def test_streaming_rejects_invalid_request_with_400(server_url: str) -> None:
 class SplitCharTokenizer(FakeTokenizer):
     """Token 3 and 4 together decode to one character. Token 3 alone is broken."""
 
-    def decode(self, token_ids, *, skip_special_tokens=False):
+    def decode(self, token_ids: list[int], *, skip_special_tokens: bool = False) -> str:
         if token_ids == [3]:
             return "\ufffd"
         if token_ids == [3, 4]:
@@ -119,10 +123,10 @@ class SplitCharTokenizer(FakeTokenizer):
 
 def test_stream_holds_back_incomplete_characters() -> None:
     class Engine:
-        def __init__(self):
+        def __init__(self) -> None:
             self.calls = 0
 
-        def forward_last(self, token_ids):
+        def forward_last(self, token_ids: np.ndarray) -> np.ndarray:
             logits = np.zeros(5, dtype=np.float32)
             logits[[3, 4][self.calls]] = 1.0
             self.calls += 1

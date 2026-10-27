@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from typing import TypedDict
 
 import numpy as np
 import torch
@@ -11,7 +12,13 @@ REFERENCE = ROOT / "engine/tests/reference_data"
 WEIGHTS = REFERENCE / "weights"
 
 
-def load_weight(manifest: dict, name: str) -> torch.Tensor:
+class WeightMetadata(TypedDict):
+    file: str
+    shape: list[int]
+    dtype: str
+
+
+def load_weight(manifest: dict[str, WeightMetadata], name: str) -> torch.Tensor:
     metadata = manifest[name]
     values = np.fromfile(WEIGHTS / metadata["file"], dtype=np.float32)
     return torch.from_numpy(values.reshape(metadata["shape"]).copy())
@@ -58,6 +65,6 @@ def test_transformer_block_matches_pytorch_reference() -> None:
         1e-5,
     )
 
-    expected = np.fromfile(REFERENCE / "block_00.bin", dtype=np.float32)
-    expected = torch.from_numpy(expected.reshape(input_tensor.shape).copy())
+    expected_values = np.fromfile(REFERENCE / "block_00.bin", dtype=np.float32)
+    expected = torch.from_numpy(expected_values.reshape(input_tensor.shape).copy())
     torch.testing.assert_close(actual, expected, rtol=1e-4, atol=1e-4)

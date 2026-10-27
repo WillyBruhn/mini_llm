@@ -20,10 +20,8 @@ class NativeGPT2:
     ) -> None:
         library = Path(
             library_path
-            or os.environ.get(
-                "MINI_LLM_LIBRARY",
-                _ROOT / "build/libmini_llm_inference.so",
-            )
+            or os.environ.get("MINI_LLM_LIBRARY")
+            or _ROOT / "build/libmini_llm_inference.so"
         ).resolve()
         if not library.is_file():
             raise FileNotFoundError(

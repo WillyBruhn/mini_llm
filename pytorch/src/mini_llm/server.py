@@ -28,7 +28,8 @@ class InferenceEngine(Protocol):
 
 
 class Tokenizer(Protocol):
-    eos_token_id: int | None
+    @property
+    def eos_token_id(self) -> int | None: ...
 
     def encode(self, text: str, *, add_special_tokens: bool = ...) -> list[int]: ...
 
@@ -253,7 +254,7 @@ def main() -> None:
     args = parse_args()
 
     logger.info("Loading GPT-2 tokenizer from %s...", args.model)
-    tokenizer = AutoTokenizer.from_pretrained(
+    tokenizer = AutoTokenizer.from_pretrained(  # type: ignore[no-untyped-call]
         args.model, local_files_only=True, use_fast=True
     )
     engine = NativeGPT2(args.weights, args.library)

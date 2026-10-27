@@ -18,12 +18,16 @@ def test_full_gpt2_cpu_forward_matches_saved_references() -> None:
     logits, block_outputs = model.forward(token_ids, capture_blocks=True)
 
     for layer, actual in enumerate(block_outputs):
-        expected = np.fromfile(REFERENCE / f"block_{layer:02d}.bin", dtype=np.float32)
-        expected = torch.from_numpy(expected.reshape(actual.shape).copy())
+        expected_values = np.fromfile(
+            REFERENCE / f"block_{layer:02d}.bin", dtype=np.float32
+        )
+        expected = torch.from_numpy(expected_values.reshape(actual.shape).copy())
         torch.testing.assert_close(actual, expected, rtol=3e-3, atol=3e-3)
 
-    expected_logits = np.fromfile(REFERENCE / "logits_last.bin", dtype=np.float32)
-    expected_logits = torch.from_numpy(expected_logits.copy())
+    expected_logits_values = np.fromfile(
+        REFERENCE / "logits_last.bin", dtype=np.float32
+    )
+    expected_logits = torch.from_numpy(expected_logits_values.copy())
     torch.testing.assert_close(logits[-1], expected_logits, rtol=3e-2, atol=3e-2)
 
     expected_token = int((REFERENCE / "expected_next_token.txt").read_text().strip())
