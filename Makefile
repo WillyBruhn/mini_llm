@@ -2,15 +2,16 @@ CC      = gcc
 NVCC    = nvcc
 CFLAGS  = -Wall -Wextra -O2 -std=c11 -Iengine/include -Iengine/tests
 LDFLAGS = -lm
-NVFLAGS = -O2 -Iengine/include -Iengine/tests
+NVFLAGS = -O2 -lineinfo -gencode arch=compute_86,code=sm_86 -gencode arch=compute_61,code=sm_61 -Iengine/include -Iengine/tests
 BUILD   = build
 GPU     ?= 1
+GIT_SHA := $(shell git rev-parse --short HEAD 2>/dev/null)$(shell git diff --quiet HEAD 2>/dev/null || echo -dirty)
 CUDA_SANITIZER ?= /usr/local/cuda-12.6
 
 # Source files
 CPU_SRCS = $(wildcard engine/src/*.c)
 CPU_OBJS = $(patsubst engine/src/%.c,$(BUILD)/%.o,$(CPU_SRCS))
-TEST_SRCS = $(filter-out engine/tests/test_gpt2.c,$(wildcard engine/tests/test_*.c))
+TEST_SRCS = $(filter-out engine/tests/test_gpt2.c engine/tests/test_gpt2_gpu.c,$(wildcard engine/tests/test_*.c))
 CUDA_SRCS = $(wildcard engine/src/*.cu)
 GPU_TEST_SRCS = $(wildcard engine/tests/test_*.cu)
 
@@ -40,7 +41,19 @@ $(BUILD)/test_runner_asan: $(TEST_SRCS) $(CPU_SRCS) $(wildcard engine/include/*.
 	$(CC) $(CFLAGS) -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined -o $@ $(TEST_SRCS) $(CPU_SRCS) $(LDFLAGS)
 
 test-gpu: $(BUILD)/test_runner_gpu
-	./$<
+	CUDA_VISIBLE_DEVICES=$(GPU) ./$<
+
+# Full GPU model against the saved PyTorch reference (run `make weights reference` first).
+gpt2-gpu-test: $(BUILD)/test_gpt2_gpu
+	CUDA_VISIBLE_DEVICES=$(GPU) ./$<
+
+NVLINK_DEPS = $(CUDA_SRCS) $(filter-out $(BUILD)/main.o,$(CPU_OBJS)) $(wildcard engine/include/*.h)
+
+$(BUILD)/test_gpt2_gpu.o: engine/tests/test_gpt2_gpu.c engine/tests/test_util.h $(wildcard engine/include/*.h) | $(BUILD)
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/test_gpt2_gpu: $(BUILD)/test_gpt2_gpu.o $(NVLINK_DEPS) | $(BUILD)
+	$(NVCC) $(NVFLAGS) -o $@ $< $(CUDA_SRCS) $(filter-out $(BUILD)/main.o,$(CPU_OBJS)) $(LDFLAGS)
 
 sanitize-gpu: $(BUILD)/test_runner_gpu_debug
 	CUDA_VISIBLE_DEVICES=$(GPU) \
@@ -59,28 +72,33 @@ $(BUILD)/test_runner_gpu: $(GPU_TEST_SRCS) $(CUDA_SRCS) engine/tests/test_util.h
 $(BUILD)/test_runner_gpu_debug: $(GPU_TEST_SRCS) $(CUDA_SRCS) engine/tests/test_util.h $(filter-out $(BUILD)/main.o,$(CPU_OBJS)) | $(BUILD)
 	$(NVCC) -g -G -O0 -DTEST_NO_FORK $(NVFLAGS) -o $@ $(GPU_TEST_SRCS) $(CUDA_SRCS) $(filter-out $(BUILD)/main.o,$(CPU_OBJS)) $(LDFLAGS)
 
-# --- CUDA build (Phase 3+) ---
-gpu: $(BUILD)/mini_llm_gpu
+# --- Benchmark ---
+# One program for both backends. Pass more options with BENCH_ARGS, for example:
+#   make bench-gpu BENCH_ARGS="--prompt-tokens 128 --decode-tokens 0"
+BENCH_ARGS ?=
 
-$(BUILD)/mini_llm_gpu: engine/src/main.c $(wildcard engine/src/*.c) $(wildcard engine/src/*.cu) | $(BUILD)
-	$(NVCC) $(NVFLAGS) -o $@ $^ $(LDFLAGS)
+$(BUILD)/bench.o: engine/bench/bench.c $(wildcard engine/include/*.h) | $(BUILD)
+	$(CC) $(CFLAGS) -DGIT_SHA='"$(GIT_SHA)"' -DBUILD_FLAGS='"$(NVFLAGS)"' -c -o $@ $<
+
+$(BUILD)/bench: $(BUILD)/bench.o $(NVLINK_DEPS) | $(BUILD)
+	$(NVCC) $(NVFLAGS) -o $@ $< $(CUDA_SRCS) $(filter-out $(BUILD)/main.o,$(CPU_OBJS)) $(LDFLAGS)
+
+bench-gpu: $(BUILD)/bench
+	CUDA_VISIBLE_DEVICES=$(GPU) ./$< --backend gpu $(BENCH_ARGS)
+
+# The CPU is slow without a KV cache, so the default workload is small.
+bench-cpu: $(BUILD)/bench
+	./$< --backend cpu --prompt-tokens 8 --decode-tokens 4 --warmup 0 --runs 3 $(BENCH_ARGS)
 
 # --- Profiling ---
-profile-nsys: $(BUILD)/mini_llm_gpu
-	CUDA_VISIBLE_DEVICES=$(GPU) nsys profile --stats=true -o $(BUILD)/report ./$<
-	uv run python ../massively_parallel_programming/nsys2trace.py $(BUILD)/report.sqlite $(BUILD)/report.trace.json
+# A short run: the profilers add a lot of overhead per kernel.
+PROFILE_ARGS ?= --backend gpu --prompt-tokens 32 --decode-tokens 0 --warmup 1 --runs 2 --no-check
 
-profile-ncu: $(BUILD)/mini_llm_gpu
-	CUDA_VISIBLE_DEVICES=$(GPU) ncu --set full -o $(BUILD)/ncu_report ./$<
+profile-nsys: $(BUILD)/bench
+	CUDA_VISIBLE_DEVICES=$(GPU) nsys profile --stats=true --force-overwrite=true -o $(BUILD)/report ./$< $(PROFILE_ARGS)
 
-# --- Benchmark ---
-bench: $(BUILD)/mini_llm
-	@echo "=== CPU Inference Benchmark ==="
-	./$< --bench
-
-bench-gpu: $(BUILD)/mini_llm_gpu
-	@echo "=== GPU Inference Benchmark ==="
-	CUDA_VISIBLE_DEVICES=$(GPU) ./$< --bench
+profile-ncu: $(BUILD)/bench
+	CUDA_VISIBLE_DEVICES=$(GPU) ncu --set full --force-overwrite -o $(BUILD)/ncu_report ./$< $(PROFILE_ARGS)
 
 # --- Reference data for testing ---
 reference:
@@ -153,4 +171,4 @@ $(BUILD):
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: sanitize-cpu clang-format-check check format ruff-format-check ruff-check mypy file-length semgrep semgrep-test all test gpt2-test test-gpu sanitize-gpu pytorch-test gpu inference-lib profile-nsys profile-ncu bench bench-gpu reference weights run clean
+.PHONY: all test gpt2-test sanitize-cpu test-gpu gpt2-gpu-test sanitize-gpu bench-gpu bench-cpu profile-nsys profile-ncu pytorch-test inference-lib reference weights run clean check format ruff-format-check ruff-check mypy clang-format-check file-length semgrep semgrep-test

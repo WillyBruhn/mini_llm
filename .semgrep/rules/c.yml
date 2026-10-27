@@ -3,7 +3,7 @@ rules:
     languages: [regex]
     severity: ERROR
     message: >-
-      Do not write to stdout from the engine. The engine runs inside Python
+      Do not write to stdout from the engine library. The engine runs inside Python
       and a caller may use stdout. Use `fprintf(stderr, ...)` for diagnostics.
     # `\b` keeps fprintf and snprintf out. Comment lines are skipped.
     pattern-regex: (?m)^(?![ \t]*(//|\*|/\*)).*\b(printf|puts|putchar)\s*\(
@@ -15,3 +15,4 @@ rules:
         - "*.cpp"
       exclude:
         - /engine/tests
+        - /engine/bench  # command-line programs print their results

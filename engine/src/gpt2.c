@@ -184,6 +184,17 @@ void gpt2_model_free(GPT2Model *model) {
     free(model);
 }
 
+GPT2WeightsView gpt2_model_weights(const GPT2Model *model) {
+    GPT2WeightsView view = {
+        .token_embedding = model->token_embedding,
+        .position_embedding = model->position_embedding,
+        .final_ln_gamma = model->final_ln_gamma,
+        .final_ln_beta = model->final_ln_beta,
+        .blocks = model->blocks,
+    };
+    return view;
+}
+
 static int gpt2_forward_impl(const GPT2Model *model,
                              const int *tokens,
                              size_t sequence_length,

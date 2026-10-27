@@ -25,6 +25,21 @@ __global__ void embed_tokens_kernel(float *out,
         token_embedding[token_id * n_embd + dim] + position_embedding[token_index * n_embd + dim];
 }
 
+void embed_tokens_device(float *d_out,
+                         const int *d_tokens,
+                         const float *d_token_embedding,
+                         const float *d_position_embedding,
+                         size_t n_tokens,
+                         size_t n_embd) {
+    size_t out_count = n_tokens * n_embd;
+    int threads_per_block = 256;
+    int blocks = (int)ceil_div(out_count, threads_per_block);
+
+    embed_tokens_kernel<<<blocks, threads_per_block>>>(d_out, d_tokens, d_token_embedding,
+                                                       d_position_embedding, n_tokens, n_embd);
+    CUDA_CHECK_LAUNCH();
+}
+
 void embed_tokens_gpu(float *out,
                       const int *tokens,
                       const float *token_embedding,
@@ -55,12 +70,7 @@ void embed_tokens_gpu(float *out,
     CUDA_CHECK(cudaMemcpy(d_position_embedding, position_embedding, position_embedding_bytes,
                           cudaMemcpyHostToDevice));
 
-    int threads_per_block = 256;
-    int blocks = (int)ceil_div(out_count, threads_per_block);
-
-    embed_tokens_kernel<<<blocks, threads_per_block>>>(d_out, d_tokens, d_token_embedding,
-                                                       d_position_embedding, n_tokens, n_embd);
-    CUDA_CHECK_LAUNCH();
+    embed_tokens_device(d_out, d_tokens, d_token_embedding, d_position_embedding, n_tokens, n_embd);
 
     CUDA_CHECK(cudaDeviceSynchronize());
 
