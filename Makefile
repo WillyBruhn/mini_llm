@@ -106,7 +106,7 @@ profile-nsys: $(BUILD)/bench
 # Deep look at ONE kernel (the first launch that matches KERNEL).
 # Example: make profile-ncu KERNEL=mult_kernel
 profile-ncu: $(BUILD)/bench
-	CUDA_VISIBLE_DEVICES=$(GPU) $(NCU) --set full --profile-from-start off -k regex:$(KERNEL) -c 1 --force-overwrite -o $(BUILD)/ncu_$(KERNEL) ./$< $(PROFILE_ARGS)
+	CUDA_VISIBLE_DEVICES=$(GPU) $(NCU) --set full --import-source yes --profile-from-start off -k regex:$(KERNEL) -c 1 --force-overwrite -o $(BUILD)/ncu_$(KERNEL) ./$< $(PROFILE_ARGS)
 
 # --- Reference data for testing ---
 reference:

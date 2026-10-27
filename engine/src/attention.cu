@@ -65,6 +65,9 @@ __global__ void attention_head_kernel(const float *query,
     }
 }
 
+// One thread per (query row, head). Online softmax: one pass over the keys.
+// Each score is computed once. The running maximum, the running sum of the
+// exponents and the output are rescaled whenever a larger score appears.
 __global__ void multi_head_attention_kernel(const float *query,
                                             const float *key,
                                             const float *value,
@@ -83,43 +86,40 @@ __global__ void multi_head_attention_kernel(const float *query,
     size_t hidden_size = n_heads * head_size;
     size_t query_offset = query_row * hidden_size + head * head_size;
     const float *query_vector = query + query_offset;
+    float *out_vector = out + query_offset;
     float scale = 1.0f / sqrtf((float)head_size);
     float maximum = -FLT_MAX;
+    float total = 0.0f;
+
+    for (size_t dimension = 0; dimension < head_size; dimension++) {
+        out_vector[dimension] = 0.0f;
+    }
 
     for (size_t key_row = 0; key_row <= query_row; key_row++) {
-        const float *key_vector = key + key_row * hidden_size + head * head_size;
+        size_t row_offset = key_row * hidden_size + head * head_size;
+        const float *key_vector = key + row_offset;
+        const float *value_vector = value + row_offset;
         float score = 0.0f;
+
         for (size_t dimension = 0; dimension < head_size; dimension++) {
             score += query_vector[dimension] * key_vector[dimension];
         }
         score *= scale;
-        if (score > maximum) {
-            maximum = score;
-        }
-    }
 
-    float total = 0.0f;
-    for (size_t key_row = 0; key_row <= query_row; key_row++) {
-        const float *key_vector = key + key_row * hidden_size + head * head_size;
-        float score = 0.0f;
+        float new_maximum = fmaxf(maximum, score);
+        float correction = expf(maximum - new_maximum);
+        float weight = expf(score - new_maximum);
+        total = total * correction + weight;
+        maximum = new_maximum;
+
         for (size_t dimension = 0; dimension < head_size; dimension++) {
-            score += query_vector[dimension] * key_vector[dimension];
+            out_vector[dimension] =
+                out_vector[dimension] * correction + weight * value_vector[dimension];
         }
-        total += expf(score * scale - maximum);
     }
 
     for (size_t dimension = 0; dimension < head_size; dimension++) {
-        float weighted_sum = 0.0f;
-        for (size_t key_row = 0; key_row <= query_row; key_row++) {
-            const float *key_vector = key + key_row * hidden_size + head * head_size;
-            float score = 0.0f;
-            for (size_t key_dimension = 0; key_dimension < head_size; key_dimension++) {
-                score += query_vector[key_dimension] * key_vector[key_dimension];
-            }
-            float weight = expf(score * scale - maximum) / total;
-            weighted_sum += weight * value[key_row * hidden_size + head * head_size + dimension];
-        }
-        out[query_offset + dimension] = weighted_sum;
+        out_vector[dimension] /= total;
     }
 }
 

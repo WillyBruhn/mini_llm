@@ -29,11 +29,15 @@ const char *gpu_stage_name(GpuStage stage) {
     return STAGE_NAMES[stage];
 }
 
+// The NVTX range "profiled runs" marks the captured part in the nsys timeline.
+// Without a capture range (for example in the GUI) it shows where to zoom in.
 void gpu_profiler_start(void) {
     CUDA_CHECK(cudaProfilerStart());
+    nvtxRangePushA("profiled runs");
 }
 
 void gpu_profiler_stop(void) {
+    nvtxRangePop();
     CUDA_CHECK(cudaProfilerStop());
 }
 
