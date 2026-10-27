@@ -4,7 +4,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from .vector_addition import embedding, layer_norm, linear, transformer_block
+from mini_llm.vector_addition import embedding, layer_norm, linear, transformer_block
 
 
 class GPT2CustomModel:

@@ -90,7 +90,7 @@ run: $(BUILD)/mini_llm
 	./$<
 
 pytorch-test: $(BUILD)/libmini_llm.so
-	PYTHONPATH=pytorch/src uv run --group dev python -m pytest pytorch/tests
+	uv run --group dev python -m pytest pytorch/tests
 
 $(BUILD)/libmini_llm.so: engine/src/vector_addition.c engine/include/vector_addition.h | $(BUILD)
 	$(CC) -Wall -Wextra -O2 -std=c11 -fPIC -shared -Iengine/include -o $@ engine/src/vector_addition.c

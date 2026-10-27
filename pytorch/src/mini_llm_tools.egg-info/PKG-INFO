@@ -1,0 +1,9 @@
+Metadata-Version: 2.4
+Name: mini-llm-tools
+Version: 0.1.0
+Summary: Python tooling for the mini_llm inference engine
+Requires-Python: <3.13,>=3.12
+Requires-Dist: huggingface-hub<1.0,>=0.34
+Requires-Dist: numpy<3.0,>=2.0
+Requires-Dist: torch<3.0,>=2.7
+Requires-Dist: transformers<5.0,>=4.50

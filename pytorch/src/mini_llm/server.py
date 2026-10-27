@@ -13,7 +13,7 @@ from typing import Protocol
 import numpy as np
 from transformers import AutoTokenizer
 
-from .native import NativeGPT2
+from mini_llm.native import NativeGPT2
 
 logger = logging.getLogger(__name__)
 

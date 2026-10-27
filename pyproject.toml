@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "mini-llm-tools"
 version = "0.1.0"
@@ -19,7 +23,15 @@ dev = [
 ]
 
 [tool.uv]
+# Install mini_llm in editable mode so it is imported by its full name.
+package = true
 default-groups = []
+
+[tool.setuptools.packages.find]
+where = ["pytorch/src"]
+
+[tool.setuptools.package-data]
+mini_llm = ["*.cpp"]
 
 [tool.ruff]
 src = ["pytorch/src", "scripts"]

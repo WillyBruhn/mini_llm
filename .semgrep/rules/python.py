@@ -1,6 +1,7 @@
 import glob
 import logging
 import os
+import sys
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -81,3 +82,42 @@ def uses_os_for_paths() -> None:
     os.fsencode("a")
     # ok: prefer-pathlib
     Path("a") / "b"
+
+
+# --- no-relative-import ---
+# ruleid: no-relative-import
+from . import sibling
+# ruleid: no-relative-import
+from .sibling import name
+# ruleid: no-relative-import
+from ..parent import name
+# ruleid: no-relative-import
+from .sibling import (
+    name_a,
+    name_b,
+)
+# ok: no-relative-import
+from mini_llm.sibling import name
+
+# ruleid: no-relative-import
+module = import_module(".sibling", __name__)
+# ok: no-relative-import
+module = import_module("mini_llm.sibling")
+
+# --- no-import-star ---
+# ruleid: no-import-star
+from mini_llm.sibling import *
+# ok: no-import-star
+from mini_llm.sibling import name
+
+# --- no-sys-path-manipulation ---
+# ruleid: no-sys-path-manipulation
+sys.path.insert(0, "/some/dir")
+# ruleid: no-sys-path-manipulation
+sys.path.append("/some/dir")
+# ruleid: no-sys-path-manipulation
+sys.path = ["/some/dir"]
+# ruleid: no-sys-path-manipulation
+sys.path += ["/some/dir"]
+# ok: no-sys-path-manipulation
+print_path = list(sys.path)

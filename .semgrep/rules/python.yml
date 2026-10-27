@@ -53,3 +53,46 @@ rules:
     paths:
       exclude:
         - .venv
+
+  - id: no-relative-import
+    languages: [python]
+    severity: ERROR
+    message: >-
+      Do not use relative imports. Use the full package path instead
+      (for example `from mini_llm.native import NativeGPT2`). This also
+      applies to `import_module(".name", ...)`.
+    pattern-either:
+      - pattern-regex: '(?m)^[ \t]*from[ \t]+\.'
+      - pattern-regex: 'import_module\(\s*["\x27]\.'
+    paths:
+      exclude:
+        - .venv
+
+  - id: no-import-star
+    languages: [python]
+    severity: ERROR
+    message: >-
+      Do not use `from module import *`. Import each name explicitly.
+    pattern: from $MODULE import *
+    paths:
+      exclude:
+        - .venv
+
+  - id: no-sys-path-manipulation
+    languages: [python]
+    severity: ERROR
+    message: >-
+      Do not change sys.path. Install the package instead
+      (`uv sync` installs `mini_llm` in editable mode) and import it by
+      its full name.
+    pattern-either:
+      - pattern: sys.path.insert(...)
+      - pattern: sys.path.append(...)
+      - pattern: sys.path.extend(...)
+      - pattern: sys.path.remove(...)
+      - pattern: sys.path = $VALUE
+      - pattern: sys.path += $VALUE
+      - pattern: sys.path[...] = $VALUE
+    paths:
+      exclude:
+        - .venv
