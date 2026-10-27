@@ -98,7 +98,7 @@ $(BUILD)/libmini_llm.so: engine/src/vector_addition.c engine/include/vector_addi
 # --- Lint ---
 # `make check` runs every linter and does not change files.
 # `make format` fixes import order and formatting.
-check: ruff-format-check ruff-check mypy semgrep-test semgrep
+check: ruff-format-check ruff-check mypy file-length semgrep-test semgrep
 
 format:
 	uv run --group dev ruff check --select I --fix .
@@ -109,6 +109,15 @@ ruff-format-check:
 
 ruff-check:
 	uv run --group dev ruff check .
+
+# Complexity limits (function complexity, arguments, branches, statements and
+# nesting) are ruff rules. See [tool.ruff.lint] in pyproject.toml.
+# No source file may be longer than MAX_FILE_LINES lines.
+MAX_FILE_LINES ?= 400
+SOURCE_GLOBS = '*.py' '*.c' '*.cu' '*.h' '*.cpp'
+file-length:
+	@git ls-files --cached --others --exclude-standard $(SOURCE_GLOBS) | xargs wc -l | \
+		awk -v max=$(MAX_FILE_LINES) '$$2 != "total" && $$1 > max { print $$2 ": " $$1 " lines (max " max ")"; bad = 1 } END { exit bad }'
 
 # Strict type checking (mypy --strict, set in pyproject.toml).
 mypy:
@@ -128,4 +137,4 @@ $(BUILD):
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: check format ruff-format-check ruff-check mypy semgrep semgrep-test all test gpt2-test test-gpu sanitize-gpu pytorch-test gpu inference-lib profile-nsys profile-ncu bench bench-gpu reference weights run clean
+.PHONY: check format ruff-format-check ruff-check mypy file-length semgrep semgrep-test all test gpt2-test test-gpu sanitize-gpu pytorch-test gpu inference-lib profile-nsys profile-ncu bench bench-gpu reference weights run clean

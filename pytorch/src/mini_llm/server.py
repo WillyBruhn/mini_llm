@@ -4,9 +4,11 @@ import argparse
 import json
 import logging
 import time
-from collections.abc import Iterator
+from collections.abc import Generator
+from email.message import Message
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from io import BufferedIOBase
 from pathlib import Path
 from typing import Protocol
 
@@ -60,7 +62,7 @@ class InferenceService:
 
     def generate_stream(
         self, prompt: object, max_new_tokens: object
-    ) -> Iterator[dict[str, object]]:
+    ) -> Generator[dict[str, object], None, None]:
         """Validate the request, then return an iterator of events.
 
         Validation runs now, so ValueError is raised before the first event.
@@ -73,7 +75,7 @@ class InferenceService:
 
     def _stream(
         self, tokens: list[int], max_new_tokens: int
-    ) -> Iterator[dict[str, object]]:
+    ) -> Generator[dict[str, object], None, None]:
         prompt_token_count = len(tokens)
         generated: list[int] = []
         token_times: list[float] = []
@@ -135,95 +137,122 @@ class InferenceService:
         return final
 
 
-def make_handler(service: InferenceService) -> type[BaseHTTPRequestHandler]:
-    class Handler(BaseHTTPRequestHandler):
-        def _send_json(self, status: HTTPStatus, payload: dict[str, object]) -> None:
-            body = json.dumps(payload).encode("utf-8")
-            self.send_response(status)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
+class RequestError(Exception):
+    """A request that must be answered with an HTTP error status."""
 
-        def _send_stream(self, events: Iterator[dict[str, object]]) -> None:
-            """Send events as NDJSON. The connection closes to end the body."""
-            self.send_response(HTTPStatus.OK)
-            self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
-            self.send_header("Cache-Control", "no-cache")
-            self.send_header("Connection", "close")
-            self.end_headers()
-            self.close_connection = True
-            try:
-                try:
-                    for event in events:
-                        self.wfile.write(json.dumps(event).encode("utf-8") + b"\n")
-                        self.wfile.flush()
-                except (RuntimeError, MemoryError) as error:
-                    # The status line is sent already, so report in the stream.
-                    error_event = {"error": f"inference failed: {error}"}
-                    self.wfile.write(json.dumps(error_event).encode("utf-8") + b"\n")
-                    self.wfile.flush()
-            except (BrokenPipeError, ConnectionResetError):
-                # The client left. Stop generation.
-                close = getattr(events, "close", None)
-                if close:
-                    close()
+    def __init__(self, status: HTTPStatus, message: str) -> None:
+        super().__init__(message)
+        self.status = status
 
-        def do_GET(self) -> None:
-            if self.path == "/health":
-                self._send_json(
-                    HTTPStatus.OK,
-                    {"status": "ok", "model": "gpt2-small-native-cpu"},
-                )
-                return
+
+def read_json_object(headers: Message, rfile: BufferedIOBase) -> dict[str, object]:
+    """Read the request body. Raise RequestError if it is not a small JSON object."""
+    try:
+        length = int(headers.get("Content-Length") or "")
+    except ValueError:
+        raise RequestError(HTTPStatus.BAD_REQUEST, "invalid Content-Length") from None
+    if length < 0 or length > MAX_REQUEST_BYTES:
+        raise RequestError(
+            HTTPStatus.REQUEST_ENTITY_TOO_LARGE, "request body is too large"
+        )
+    try:
+        request = json.loads(rfile.read(length))
+    except ValueError as error:  # Includes JSONDecodeError and UnicodeDecodeError.
+        raise RequestError(HTTPStatus.BAD_REQUEST, str(error)) from error
+    if not isinstance(request, dict):
+        raise RequestError(HTTPStatus.BAD_REQUEST, "request body must be a JSON object")
+    return request
+
+
+def write_line(wfile: BufferedIOBase, event: dict[str, object]) -> None:
+    wfile.write(json.dumps(event).encode("utf-8") + b"\n")
+    wfile.flush()
+
+
+def write_ndjson(
+    wfile: BufferedIOBase, events: Generator[dict[str, object], None, None]
+) -> None:
+    """Write each event as one line. Stop generation if the client leaves."""
+    try:
+        try:
+            for event in events:
+                write_line(wfile, event)
+        except (RuntimeError, MemoryError) as error:
+            # The status line is sent already, so report the error in the stream.
+            write_line(wfile, {"error": f"inference failed: {error}"})
+    except (BrokenPipeError, ConnectionResetError):
+        events.close()
+
+
+class ServiceHandler(BaseHTTPRequestHandler):
+    """HTTP handler. Subclasses set `service` (see `make_handler`)."""
+
+    service: InferenceService
+
+    def _send_json(self, status: HTTPStatus, payload: dict[str, object]) -> None:
+        body = json.dumps(payload).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _send_stream(self, events: Generator[dict[str, object], None, None]) -> None:
+        """Send events as NDJSON. The connection closes to end the body."""
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.close_connection = True
+        write_ndjson(self.wfile, events)
+
+    def do_GET(self) -> None:
+        if self.path == "/health":
+            self._send_json(
+                HTTPStatus.OK,
+                {"status": "ok", "model": "gpt2-small-native-cpu"},
+            )
+            return
+        self._send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+
+    def do_POST(self) -> None:
+        if self.path != "/generate":
             self._send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+            return
 
-        def do_POST(self) -> None:
-            if self.path != "/generate":
-                self._send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+        try:
+            request = read_json_object(self.headers, self.rfile)
+            prompt = request.get("prompt")
+            max_new_tokens = request.get("max_new_tokens", DEFAULT_NEW_TOKENS)
+            if request.get("stream", False) is True:
+                # Validation runs here, before any header is sent.
+                self._send_stream(self.service.generate_stream(prompt, max_new_tokens))
                 return
+            result = self.service.generate(prompt, max_new_tokens)
+        except RequestError as error:
+            self._send_json(error.status, {"error": str(error)})
+            return
+        except ValueError as error:
+            self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+            return
+        except (RuntimeError, MemoryError) as error:
+            self._send_json(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                {"error": f"inference failed: {error}"},
+            )
+            return
+        self._send_json(HTTPStatus.OK, result)
 
-            content_length = self.headers.get("Content-Length")
-            try:
-                length = int(content_length or "")
-            except ValueError:
-                self._send_json(
-                    HTTPStatus.BAD_REQUEST, {"error": "invalid Content-Length"}
-                )
-                return
-            if length < 0 or length > MAX_REQUEST_BYTES:
-                self._send_json(
-                    HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
-                    {"error": "request body is too large"},
-                )
-                return
+    def log_message(self, format: str, *args: object) -> None:
+        logger.info("%s - %s", self.address_string(), format % args)
 
-            try:
-                request = json.loads(self.rfile.read(length))
-                if not isinstance(request, dict):
-                    raise ValueError("request body must be a JSON object")
-                prompt = request.get("prompt")
-                max_new_tokens = request.get("max_new_tokens", DEFAULT_NEW_TOKENS)
-                if request.get("stream", False) is True:
-                    # Validation runs here, before any header is sent.
-                    events = service.generate_stream(prompt, max_new_tokens)
-                    self._send_stream(events)
-                    return
-                result = service.generate(prompt, max_new_tokens)
-            except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as error:
-                self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
-                return
-            except (RuntimeError, MemoryError) as error:
-                self._send_json(
-                    HTTPStatus.INTERNAL_SERVER_ERROR,
-                    {"error": f"inference failed: {error}"},
-                )
-                return
-            self._send_json(HTTPStatus.OK, result)
 
-        def log_message(self, format: str, *args: object) -> None:
-            logger.info("%s - %s", self.address_string(), format % args)
+def make_handler(service: InferenceService) -> type[BaseHTTPRequestHandler]:
+    class Handler(ServiceHandler):
+        pass
 
+    Handler.service = service
     return Handler
 
 

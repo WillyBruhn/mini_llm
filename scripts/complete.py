@@ -29,6 +29,14 @@ class CausalLM(Protocol):
 
 
 @dataclass
+class GenerationSettings:
+    max_new_tokens: int
+    temperature: float
+    top_p: float
+    device: str
+
+
+@dataclass
 class Message:
     prompt: str
     completion: str
@@ -96,24 +104,21 @@ def complete_prompt(
     model: CausalLM,
     tokenizer: PreTrainedTokenizerBase,
     prompt: str,
-    max_new_tokens: int,
-    temperature: float,
-    top_p: float,
-    device: str,
+    settings: GenerationSettings,
 ) -> str:
     max_positions = getattr(model.config, "n_positions", tokenizer.model_max_length)
-    prompt = trim_prompt(prompt, tokenizer, max_positions - max_new_tokens)
-    inputs = tokenizer(prompt, return_tensors="pt").to(device)
+    prompt = trim_prompt(prompt, tokenizer, max_positions - settings.max_new_tokens)
+    inputs = tokenizer(prompt, return_tensors="pt").to(settings.device)
     generation_args = {
-        "max_new_tokens": max_new_tokens,
+        "max_new_tokens": settings.max_new_tokens,
         "pad_token_id": tokenizer.eos_token_id,
     }
-    if temperature > 0:
+    if settings.temperature > 0:
         generation_args.update(
             {
                 "do_sample": True,
-                "temperature": temperature,
-                "top_p": top_p,
+                "temperature": settings.temperature,
+                "top_p": settings.top_p,
             }
         )
 
@@ -142,6 +147,9 @@ def main() -> None:
     model.to(device)
     model.eval()
 
+    settings = GenerationSettings(
+        args.max_new_tokens, args.temperature, args.top_p, device
+    )
     history: list[Message] = []
     logger.info("Ready. Enter a prompt to complete. Commands: /clear, /history, /exit")
 
@@ -167,15 +175,7 @@ def main() -> None:
                 logger.info(f"[{index}] Completion:{message.completion}")
             continue
 
-        completion = complete_prompt(
-            model,
-            tokenizer,
-            prompt,
-            args.max_new_tokens,
-            args.temperature,
-            args.top_p,
-            device,
-        )
+        completion = complete_prompt(model, tokenizer, prompt, settings)
         history.append(Message(prompt, completion))
         logger.info(f"Completion:{completion}")
 

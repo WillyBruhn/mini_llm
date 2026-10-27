@@ -39,9 +39,31 @@ src = ["pytorch/src", "scripts"]
 extend-exclude = [".semgrep", "build", "models"]
 
 [tool.ruff.lint]
+# Needed for PLR1702. Only the preview rules that are named in `select` run.
+preview = true
+explicit-preview-rules = true
 # Defaults (E4, E7, E9, F), isort import sorting, and ANN (type annotations
 # are required on every function argument and return value).
-select = ["E4", "E7", "E9", "F", "I", "ANN"]
+select = [
+    "E4", "E7", "E9", "F", "I", "ANN",
+    # Complexity limits.
+    "C901",    # cyclomatic complexity of a function
+    "PLR0911", # too many return statements
+    "PLR0912", # too many branches
+    "PLR0913", # too many arguments
+    "PLR0915", # too many statements
+    "PLR1702", # too deeply nested blocks (preview rule)
+]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+[tool.ruff.lint.pylint]
+max-args = 5
+max-branches = 12
+max-returns = 6
+max-statements = 50
+max-nested-blocks = 4
 
 [tool.ruff.lint.isort]
 known-first-party = ["mini_llm"]

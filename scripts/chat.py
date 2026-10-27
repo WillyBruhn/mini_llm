@@ -141,6 +141,35 @@ def run_blocking(url: str, prompt: str, max_new_tokens: int) -> str | None:
     return completion
 
 
+def show_history(history: list[tuple[str, str]]) -> None:
+    for index, (old_prompt, old_completion) in enumerate(history, start=1):
+        logger.info(f"\n[{index}] Prompt: {old_prompt}")
+        logger.info(f"[{index}] Completion: {old_completion}")
+
+
+def handle_command(prompt: str, history: list[tuple[str, str]]) -> bool:
+    """Run /clear or /history. Return True if the prompt was a command."""
+    if prompt == "/clear":
+        history.clear()
+        logger.info("History cleared.")
+        return True
+    if prompt == "/history":
+        show_history(history)
+        return True
+    return False
+
+
+def ask(args: argparse.Namespace, prompt: str) -> str | None:
+    """Send one prompt. Return the completion, or None if the request failed."""
+    try:
+        if args.no_stream:
+            return run_blocking(args.url, prompt, args.max_new_tokens)
+        return run_streaming(args.url, prompt, args.max_new_tokens)
+    except RuntimeError as error:
+        logger.error(f"\nError: {error}")
+        return None
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Chat with the local mini_llm server")
     parser.add_argument("--url", default="http://127.0.0.1:8000")
@@ -161,28 +190,11 @@ def main() -> None:
         except (EOFError, KeyboardInterrupt):
             write_stream("\n")
             break
-        if not prompt:
-            continue
         if prompt in {"/exit", "/quit"}:
             break
-        if prompt == "/clear":
-            history.clear()
-            logger.info("History cleared.")
+        if not prompt or handle_command(prompt, history):
             continue
-        if prompt == "/history":
-            for index, (old_prompt, old_completion) in enumerate(history, start=1):
-                logger.info(f"\n[{index}] Prompt: {old_prompt}")
-                logger.info(f"[{index}] Completion: {old_completion}")
-            continue
-
-        try:
-            if args.no_stream:
-                completion = run_blocking(args.url, prompt, args.max_new_tokens)
-            else:
-                completion = run_streaming(args.url, prompt, args.max_new_tokens)
-        except RuntimeError as error:
-            logger.error(f"\nError: {error}")
-            continue
+        completion = ask(args, prompt)
         if completion is not None:
             history.append((prompt, completion))
 
