@@ -10,8 +10,9 @@ __global__ void mult_kernel(const float *a,
                             const size_t a_rows,
                             const size_t a_columns,
                             const size_t b_columns) {
-    size_t row = blockIdx.x * blockDim.x + threadIdx.x;
-    size_t col = blockIdx.y * blockDim.y + threadIdx.y;
+    // threadIdx.x runs over the columns, so a warp reads and writes neighbouring floats.
+    size_t row = blockIdx.y * blockDim.y + threadIdx.y;
+    size_t col = blockIdx.x * blockDim.x + threadIdx.x;
 
     if (row >= a_rows) {
         return;
@@ -39,8 +40,8 @@ void matrixmult_device(const float *d_a,
                        const size_t a_columns,
                        const size_t b_columns) {
     dim3 threads_per_block(16, 16);
-    dim3 blocks((unsigned)ceil_div(a_rows, threads_per_block.x),
-                (unsigned)ceil_div(b_columns, threads_per_block.y));
+    dim3 blocks((unsigned)ceil_div(b_columns, threads_per_block.x),
+                (unsigned)ceil_div(a_rows, threads_per_block.y));
 
     mult_kernel<<<blocks, threads_per_block>>>(d_a, d_b, d_out, a_rows, a_columns, b_columns);
     CUDA_CHECK_LAUNCH();
