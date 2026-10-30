@@ -1,6 +1,11 @@
 # mini_llm
 
-Having fun with implementing a llm from scratch and then see what I can optimize.
+Having fun with implementing a llm from scratch.
+Implemented in C with pytorch bindings.
+Now I try to optimze ttft on a single request.
+Later I might add sth like vllm and try to optimize throughput.
+
+Intermediate Goal: Learn to use nsys and ncu proerly and learn which optimizations work.
 
 ## So far ...
 
@@ -42,9 +47,3 @@ make profile-nsys             # timeline: build/report.nsys-rep
 make profile-ncu KERNEL=mult_kernel   # one kernel in detail
 make serve-gpu                # local server, then: uv run scripts/chat.py
 ```
-
-`GPU=<index>` selects the GPU (default 1).
-
-## Next
-
-LayerNorm (4.2 ms for little work), attention occupancy, shared-memory tiling for the matmul, KV cache. See `PROJECT_PLAN.md`.
