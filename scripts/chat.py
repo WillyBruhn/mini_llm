@@ -40,8 +40,17 @@ def open_request(url: str, payload: dict[str, object]) -> Iterator[HTTPResponse]
         ) from error
 
 
-def request_completion(url: str, prompt: str, max_new_tokens: int) -> dict[str, object]:
-    payload = {"prompt": prompt, "max_new_tokens": max_new_tokens}
+def build_payload(prompt: str, max_new_tokens: int | None) -> dict[str, object]:
+    payload: dict[str, object] = {"prompt": prompt}
+    if max_new_tokens is not None:
+        payload["max_new_tokens"] = max_new_tokens
+    return payload
+
+
+def request_completion(
+    url: str, prompt: str, max_new_tokens: int | None
+) -> dict[str, object]:
+    payload = build_payload(prompt, max_new_tokens)
     with open_request(url, payload) as response:
         result = json.loads(response.read())
     if not isinstance(result, dict):
@@ -50,10 +59,10 @@ def request_completion(url: str, prompt: str, max_new_tokens: int) -> dict[str, 
 
 
 def stream_events(
-    url: str, prompt: str, max_new_tokens: int
+    url: str, prompt: str, max_new_tokens: int | None
 ) -> Generator[dict[str, object], None, None]:
     """Yield one decoded event for each NDJSON line sent by the server."""
-    payload = {"prompt": prompt, "max_new_tokens": max_new_tokens, "stream": True}
+    payload = build_payload(prompt, max_new_tokens) | {"stream": True}
     with open_request(url, payload) as response:
         for line in response:
             line = line.strip()
@@ -71,7 +80,7 @@ def fmt_rate(value: object) -> str:
     return f"{value:.2f}" if isinstance(value, (int, float)) else "n/a"
 
 
-def run_streaming(url: str, prompt: str, max_new_tokens: int) -> str:
+def run_streaming(url: str, prompt: str, max_new_tokens: int | None) -> str:
     """Print tokens as they arrive. Return the text. Print the speed summary."""
     started = time.perf_counter()
     arrival_times: list[float] = []
@@ -121,7 +130,7 @@ def run_streaming(url: str, prompt: str, max_new_tokens: int) -> str:
     return "".join(pieces)
 
 
-def run_blocking(url: str, prompt: str, max_new_tokens: int) -> str | None:
+def run_blocking(url: str, prompt: str, max_new_tokens: int | None) -> str | None:
     request_started = time.perf_counter()
     result = request_completion(url, prompt, max_new_tokens)
     elapsed_seconds = time.perf_counter() - request_started
@@ -173,7 +182,12 @@ def ask(args: argparse.Namespace, prompt: str) -> str | None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Chat with the local mini_llm server")
     parser.add_argument("--url", default="http://127.0.0.1:8000")
-    parser.add_argument("--max-new-tokens", type=int, default=8)
+    parser.add_argument(
+        "--max-new-tokens",
+        type=int,
+        default=16,
+        help="Stop after this many tokens (the server itself has no limit)",
+    )
     parser.add_argument(
         "--no-stream",
         action="store_true",

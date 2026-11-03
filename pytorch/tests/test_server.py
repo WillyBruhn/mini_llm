@@ -1,15 +1,11 @@
 import json
-import threading
-from collections.abc import Iterator
-from http.server import HTTPServer
-from typing import Any
-from urllib.error import HTTPError
-from urllib.request import Request, urlopen
 
 import numpy as np
 import pytest
+from fastapi.testclient import TestClient
 
-from mini_llm.server import InferenceService, make_handler
+from mini_llm.schemas import DoneEvent, TokenEvent
+from mini_llm.server import MAX_CONTEXT, InferenceService, create_app
 
 
 class FakeTokenizer:
@@ -32,60 +28,34 @@ class FakeEngine:
 
 
 @pytest.fixture
-def server_url() -> Iterator[str]:
-    service = InferenceService(FakeEngine(), FakeTokenizer())
-    server = HTTPServer(("127.0.0.1", 0), make_handler(service))
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        yield f"http://127.0.0.1:{server.server_port}"
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join()
+def client() -> TestClient:
+    return TestClient(create_app(InferenceService(FakeEngine(), FakeTokenizer())))
 
 
-def test_health_and_generation_endpoints(server_url: str) -> None:
-    with urlopen(f"{server_url}/health") as response:
-        assert json.loads(response.read())["status"] == "ok"
+def test_health_and_generation_endpoints(client: TestClient) -> None:
+    assert client.get("/health").json()["status"] == "ok"
 
-    request = Request(
-        f"{server_url}/generate",
-        data=json.dumps({"prompt": "hello", "max_new_tokens": 3}).encode(),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    with urlopen(request) as response:
-        result = json.loads(response.read())
+    response = client.post("/generate", json={"prompt": "hello", "max_new_tokens": 3})
+    result = response.json()
     timings = result.pop("timings")
     assert result == {
         "completion": " ok",
         "generated_tokens": 2,
         "prompt_tokens": 1,
+        "finish_reason": "stop",
     }
     assert timings["ttft_s"] >= 0
     assert timings["total_s"] >= timings["ttft_s"]
 
 
-def _stream(
-    server_url: str, body: dict[str, object]
-) -> tuple[int, str, list[dict[str, Any]]]:
-    request = Request(
-        f"{server_url}/generate",
-        data=json.dumps(body).encode(),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    with urlopen(request) as response:
+def test_streaming_matches_blocking_generation(client: TestClient) -> None:
+    with client.stream(
+        "POST",
+        "/generate",
+        json={"prompt": "hello", "max_new_tokens": 3, "stream": True},
+    ) as response:
         content_type = response.headers["Content-Type"]
-        events = [json.loads(line) for line in response if line.strip()]
-    return 200, content_type, events
-
-
-def test_streaming_matches_blocking_generation(server_url: str) -> None:
-    _, content_type, events = _stream(
-        server_url, {"prompt": "hello", "max_new_tokens": 3, "stream": True}
-    )
+        events = [json.loads(line) for line in response.iter_lines() if line.strip()]
     assert content_type.startswith("application/x-ndjson")
     *token_events, final = events
     assert final["done"] is True
@@ -98,16 +68,30 @@ def test_streaming_matches_blocking_generation(server_url: str) -> None:
     assert final["timings"]["ttft_s"] == times[0]
 
 
-def test_streaming_rejects_invalid_request_with_400(server_url: str) -> None:
-    request = Request(
-        f"{server_url}/generate",
-        data=json.dumps({"prompt": "", "stream": True}).encode(),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    with pytest.raises(HTTPError) as error:
-        urlopen(request)
-    assert error.value.code == 400
+def test_streaming_rejects_invalid_request_with_400(client: TestClient) -> None:
+    response = client.post("/generate", json={"prompt": "", "stream": True})
+    assert response.status_code == 400
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"prompt": 5},
+        {"max_new_tokens": 2},
+        {"prompt": "hi", "max_new_tokens": "many"},
+        {"prompt": "hi", "max_new_tokens": 0},
+    ],
+)
+def test_malformed_request_is_400_with_error_message(
+    client: TestClient, body: dict[str, object]
+) -> None:
+    response = client.post("/generate", json=body)
+    assert response.status_code == 400
+    assert response.json()["error"]
+
+
+def test_unknown_route_is_404(client: TestClient) -> None:
+    assert client.get("/nope").status_code == 404
 
 
 class SplitCharTokenizer(FakeTokenizer):
@@ -134,17 +118,30 @@ def test_stream_holds_back_incomplete_characters() -> None:
 
     service = InferenceService(Engine(), SplitCharTokenizer())
     events = list(service.generate_stream("hi", 2))
-    assert [e["token"] for e in events[:2]] == ["", "é"]
-    assert events[-1]["completion"] == "é"
+    assert [e.token for e in events[:2] if isinstance(e, TokenEvent)] == ["", "é"]
+    final = events[-1]
+    assert isinstance(final, DoneEvent)
+    assert final.completion == "é"
 
 
-def test_generation_rejects_invalid_request(server_url: str) -> None:
-    request = Request(
-        f"{server_url}/generate",
-        data=json.dumps({"prompt": "", "max_new_tokens": 2}).encode(),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    with pytest.raises(HTTPError) as error:
-        urlopen(request)
-    assert error.value.code == 400
+class NeverStopsEngine:
+    def forward_last(self, token_ids: np.ndarray) -> np.ndarray:
+        logits = np.zeros(5, dtype=np.float32)
+        logits[2] = 1.0
+        return logits
+
+
+def test_no_limit_runs_until_context_is_full() -> None:
+    service = InferenceService(NeverStopsEngine(), FakeTokenizer())
+    events = list(service.generate_stream("hello", None))
+    final = events[-1]
+    assert isinstance(final, DoneEvent)
+    assert final.finish_reason == "context"
+    assert final.prompt_tokens + final.generated_tokens == MAX_CONTEXT
+
+
+def test_limit_above_old_cap_is_accepted_and_reports_length() -> None:
+    service = InferenceService(NeverStopsEngine(), FakeTokenizer())
+    final = service.generate("hello", 100)
+    assert final.generated_tokens == 100
+    assert final.finish_reason == "length"

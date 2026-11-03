@@ -1,3 +1,4 @@
+README.md
 pyproject.toml
 pytorch/src/mini_llm/__init__.py
 pytorch/src/mini_llm/gpt2.py

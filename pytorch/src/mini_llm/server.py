@@ -1,28 +1,35 @@
-"""Local HTTP API for greedy generation with the native C GPT-2 engine."""
+"""FastAPI server for greedy generation with the native C GPT-2 engine."""
 
 import argparse
-import json
 import logging
 import time
-from collections.abc import Generator
-from email.message import Message
+from collections.abc import AsyncIterator, Generator
 from http import HTTPStatus
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from io import BufferedIOBase
 from pathlib import Path
-from typing import Protocol
+from typing import Literal, Protocol
 
+import anyio
 import numpy as np
+import uvicorn
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from transformers import AutoTokenizer
 
 from mini_llm.native import NativeGPT2
+from mini_llm.schemas import (
+    DoneEvent,
+    ErrorResponse,
+    GenerateRequest,
+    HealthResponse,
+    StreamEvent,
+    Timings,
+    TokenEvent,
+)
 
 logger = logging.getLogger(__name__)
 
 MAX_CONTEXT = 1024
-MAX_NEW_TOKENS = 32
-DEFAULT_NEW_TOKENS = 8
-MAX_REQUEST_BYTES = 1_000_000
 
 
 class InferenceEngine(Protocol):
@@ -51,44 +58,46 @@ class InferenceService:
         self.tokenizer = tokenizer
         self.model_name = model_name
 
-    def _prepare(self, prompt: object, max_new_tokens: object) -> list[int]:
-        if not isinstance(prompt, str) or not prompt.strip():
+    def _prepare(self, prompt: str, max_new_tokens: int | None) -> list[int]:
+        if not prompt.strip():
             raise ValueError("prompt must be a non-empty string")
-        if (
-            isinstance(max_new_tokens, bool)
-            or not isinstance(max_new_tokens, int)
-            or not 1 <= max_new_tokens <= MAX_NEW_TOKENS
-        ):
-            raise ValueError(f"max_new_tokens must be between 1 and {MAX_NEW_TOKENS}")
+        if max_new_tokens is not None and max_new_tokens < 1:
+            raise ValueError("max_new_tokens must be a positive integer or null")
 
         tokens = self.tokenizer.encode(prompt, add_special_tokens=False)
         if not tokens:
             raise ValueError("prompt did not produce any tokens")
-        return tokens[-(MAX_CONTEXT - max_new_tokens) :]
+        # Without a limit, keep the whole prompt that fits and generate until
+        # EOS or until the context window is full. With a limit, reserve room.
+        reserve = 1 if max_new_tokens is None else min(max_new_tokens, MAX_CONTEXT - 1)
+        return tokens[-(MAX_CONTEXT - reserve) :]
 
     def generate_stream(
-        self, prompt: object, max_new_tokens: object
-    ) -> Generator[dict[str, object], None, None]:
+        self, prompt: str, max_new_tokens: int | None
+    ) -> Generator[StreamEvent, None, None]:
         """Validate the request, then return an iterator of events.
 
         Validation runs now, so ValueError is raised before the first event.
-        Each token event is {"token": text, "token_id": id, "t": seconds}.
-        The last event has "done": true, the full completion, and timings.
+        The events are TokenEvents, then one DoneEvent with the full completion
+        and the timings.
         """
         tokens = self._prepare(prompt, max_new_tokens)
-        assert isinstance(max_new_tokens, int)
         return self._stream(tokens, max_new_tokens)
 
     def _stream(
-        self, tokens: list[int], max_new_tokens: int
-    ) -> Generator[dict[str, object], None, None]:
+        self, tokens: list[int], max_new_tokens: int | None
+    ) -> Generator[StreamEvent, None, None]:
         prompt_token_count = len(tokens)
         generated: list[int] = []
         token_times: list[float] = []
         emitted_chars = 0
         started = time.perf_counter()
 
-        for _ in range(max_new_tokens):
+        finish_reason: Literal["stop", "length", "context"] = "length"
+        while max_new_tokens is None or len(generated) < max_new_tokens:
+            if len(tokens) >= MAX_CONTEXT:
+                finish_reason = "context"
+                break
             input_ids = np.asarray(tokens, dtype=np.int32)
             logits = self.engine.forward_last(input_ids)
             next_token = int(np.argmax(logits))
@@ -104,9 +113,10 @@ class InferenceService:
             else:
                 delta = text[emitted_chars:]
                 emitted_chars = len(text)
-            yield {"token": delta, "token_id": next_token, "t": now}
+            yield TokenEvent(token=delta, token_id=next_token, t=now)
 
             if next_token == self.tokenizer.eos_token_id:
+                finish_reason = "stop"
                 break
             tokens.append(next_token)
 
@@ -115,151 +125,102 @@ class InferenceService:
         count = len(generated)
         ttft = token_times[0]
         decode_seconds = token_times[-1] - ttft
-        yield {
-            "done": True,
-            "completion": completion,
-            "generated_tokens": count,
-            "prompt_tokens": prompt_token_count,
-            "timings": {
-                "ttft_s": ttft,
-                "decode_s": decode_seconds,
-                "total_s": total,
-                # Tokens after the first one, divided by the time they took.
-                "decode_tokens_per_s": (
+        yield DoneEvent(
+            completion=completion,
+            generated_tokens=count,
+            prompt_tokens=prompt_token_count,
+            finish_reason=finish_reason,
+            timings=Timings(
+                ttft_s=ttft,
+                decode_s=decode_seconds,
+                total_s=total,
+                decode_tokens_per_s=(
                     (count - 1) / decode_seconds
                     if count > 1 and decode_seconds > 0
                     else None
                 ),
-                "tokens_per_s": count / total if total > 0 else None,
-            },
-        }
+                tokens_per_s=count / total if total > 0 else None,
+            ),
+        )
 
-    def generate(self, prompt: object, max_new_tokens: object) -> dict[str, object]:
-        final: dict[str, object] = {}
+    def generate(self, prompt: str, max_new_tokens: int | None) -> DoneEvent:
+        final: DoneEvent | None = None
         for event in self.generate_stream(prompt, max_new_tokens):
-            if event.get("done"):
+            if isinstance(event, DoneEvent):
                 final = event
-        final.pop("done", None)
+        assert final is not None
         return final
 
 
-class RequestError(Exception):
-    """A request that must be answered with an HTTP error status."""
-
-    def __init__(self, status: HTTPStatus, message: str) -> None:
-        super().__init__(message)
-        self.status = status
+def _error(status: HTTPStatus, message: str) -> JSONResponse:
+    return JSONResponse(ErrorResponse(error=message).model_dump(), status_code=status)
 
 
-def read_json_object(headers: Message, rfile: BufferedIOBase) -> dict[str, object]:
-    """Read the request body. Raise RequestError if it is not a small JSON object."""
+async def stream_ndjson(
+    events: Generator[StreamEvent, None, None],
+) -> AsyncIterator[bytes]:
+    """Yield each event as one line. The engine runs in a worker thread.
+
+    If the client leaves, this generator is closed and generation stops.
+    """
+    end = object()
     try:
-        length = int(headers.get("Content-Length") or "")
-    except ValueError:
-        raise RequestError(HTTPStatus.BAD_REQUEST, "invalid Content-Length") from None
-    if length < 0 or length > MAX_REQUEST_BYTES:
-        raise RequestError(
-            HTTPStatus.REQUEST_ENTITY_TOO_LARGE, "request body is too large"
-        )
-    try:
-        request = json.loads(rfile.read(length))
-    except ValueError as error:  # Includes JSONDecodeError and UnicodeDecodeError.
-        raise RequestError(HTTPStatus.BAD_REQUEST, str(error)) from error
-    if not isinstance(request, dict):
-        raise RequestError(HTTPStatus.BAD_REQUEST, "request body must be a JSON object")
-    return request
-
-
-def write_line(wfile: BufferedIOBase, event: dict[str, object]) -> None:
-    wfile.write(json.dumps(event).encode("utf-8") + b"\n")
-    wfile.flush()
-
-
-def write_ndjson(
-    wfile: BufferedIOBase, events: Generator[dict[str, object], None, None]
-) -> None:
-    """Write each event as one line. Stop generation if the client leaves."""
-    try:
-        try:
-            for event in events:
-                write_line(wfile, event)
-        except (RuntimeError, MemoryError) as error:
-            # The status line is sent already, so report the error in the stream.
-            write_line(wfile, {"error": f"inference failed: {error}"})
-    except (BrokenPipeError, ConnectionResetError):
+        while True:
+            try:
+                event = await anyio.to_thread.run_sync(next, events, end)
+            except (RuntimeError, MemoryError) as error:
+                # The status line is sent already, so report the error in the stream.
+                yield _line(ErrorResponse(error=f"inference failed: {error}"))
+                return
+            if event is end:
+                return
+            assert isinstance(event, (TokenEvent, DoneEvent))
+            yield _line(event)
+    finally:
         events.close()
 
 
-class ServiceHandler(BaseHTTPRequestHandler):
-    """HTTP handler. Subclasses set `service` (see `make_handler`)."""
+def _line(event: StreamEvent) -> bytes:
+    return event.model_dump_json().encode("utf-8") + b"\n"
 
-    service: InferenceService
 
-    def _send_json(self, status: HTTPStatus, payload: dict[str, object]) -> None:
-        body = json.dumps(payload).encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+def create_app(service: InferenceService) -> FastAPI:
+    app = FastAPI(title="mini_llm")
 
-    def _send_stream(self, events: Generator[dict[str, object], None, None]) -> None:
-        """Send events as NDJSON. The connection closes to end the body."""
-        self.send_response(HTTPStatus.OK)
-        self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
-        self.send_header("Cache-Control", "no-cache")
-        self.send_header("Connection", "close")
-        self.end_headers()
-        self.close_connection = True
-        write_ndjson(self.wfile, events)
+    @app.exception_handler(RequestValidationError)
+    async def invalid_request(
+        _: Request, error: RequestValidationError
+    ) -> JSONResponse:
+        first = error.errors()[0]
+        field = ".".join(str(part) for part in first["loc"] if part != "body")
+        return _error(HTTPStatus.BAD_REQUEST, f"{field}: {first['msg']}")
 
-    def do_GET(self) -> None:
-        if self.path == "/health":
-            self._send_json(
-                HTTPStatus.OK,
-                {"status": "ok", "model": self.service.model_name},
-            )
-            return
-        self._send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+    @app.get("/health")
+    def health() -> HealthResponse:
+        return HealthResponse(model=service.model_name)
 
-    def do_POST(self) -> None:
-        if self.path != "/generate":
-            self._send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
-            return
-
+    # A plain `def` endpoint runs in a worker thread, so the event loop stays free.
+    @app.post("/generate", response_model=None)
+    def generate(request: GenerateRequest) -> Response:
         try:
-            request = read_json_object(self.headers, self.rfile)
-            prompt = request.get("prompt")
-            max_new_tokens = request.get("max_new_tokens", DEFAULT_NEW_TOKENS)
-            if request.get("stream", False) is True:
+            if request.stream:
                 # Validation runs here, before any header is sent.
-                self._send_stream(self.service.generate_stream(prompt, max_new_tokens))
-                return
-            result = self.service.generate(prompt, max_new_tokens)
-        except RequestError as error:
-            self._send_json(error.status, {"error": str(error)})
-            return
+                events = service.generate_stream(request.prompt, request.max_new_tokens)
+                return StreamingResponse(
+                    stream_ndjson(events),
+                    media_type="application/x-ndjson; charset=utf-8",
+                    headers={"Cache-Control": "no-cache"},
+                )
+            result = service.generate(request.prompt, request.max_new_tokens)
+            return JSONResponse(result.model_dump(exclude={"done"}))
         except ValueError as error:
-            self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
-            return
+            return _error(HTTPStatus.BAD_REQUEST, str(error))
         except (RuntimeError, MemoryError) as error:
-            self._send_json(
-                HTTPStatus.INTERNAL_SERVER_ERROR,
-                {"error": f"inference failed: {error}"},
+            return _error(
+                HTTPStatus.INTERNAL_SERVER_ERROR, f"inference failed: {error}"
             )
-            return
-        self._send_json(HTTPStatus.OK, result)
 
-    def log_message(self, format: str, *args: object) -> None:
-        logger.info("%s - %s", self.address_string(), format % args)
-
-
-def make_handler(service: InferenceService) -> type[BaseHTTPRequestHandler]:
-    class Handler(ServiceHandler):
-        pass
-
-    Handler.service = service
-    return Handler
+    return app
 
 
 def parse_args() -> argparse.Namespace:
@@ -276,7 +237,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--backend",
         choices=["cpu", "gpu"],
-        default="cpu",
+        default="gpu",
         help="Where the model runs. The GPU needs `make gpu-lib`",
     )
     parser.add_argument(
@@ -301,14 +262,9 @@ def main() -> None:
     )
     engine = NativeGPT2(args.weights, args.library, args.backend)
     service = InferenceService(engine, tokenizer, f"gpt2-small-native-{args.backend}")
-    server = ThreadingHTTPServer((args.host, args.port), make_handler(service))
-    logger.info("Listening on http://%s:%s (Ctrl+C to stop)", args.host, args.port)
     try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        logger.info("Stopping server.")
+        uvicorn.run(create_app(service), host=args.host, port=args.port)
     finally:
-        server.server_close()
         engine.close()
 
 
