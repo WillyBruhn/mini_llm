@@ -50,6 +50,30 @@ GPT2GpuKvCache *gpt2_gpu_kv_cache_create(void);
 void gpt2_gpu_kv_cache_free(GPT2GpuKvCache *cache);
 // Forget all tokens. Call this before you start a new sequence.
 void gpt2_gpu_kv_cache_reset(GPT2GpuKvCache *cache);
+// Number of tokens stored. A NULL cache has length 0.
+size_t gpt2_gpu_kv_cache_length(const GPT2GpuKvCache *cache);
+// Copies K and V of the first `rows` tokens of one layer to the host:
+// k_out and v_out hold [rows, GPT2_N_EMBD] floats each. For tests and debugging.
+// Returns 0 for a bad layer or when rows is larger than the cache length.
+int gpt2_gpu_kv_cache_copy_layer(
+    const GPT2GpuKvCache *cache, size_t layer, size_t rows, float *k_out, float *v_out);
+
+// Processes the whole prompt like gpt2_gpu_forward_last (same logits) and also saves K and V
+// of every layer in the cache, which then holds sequence_length tokens. Any earlier content
+// of the cache is replaced. Returns 1 on success and 0 for invalid input (cache unchanged).
+int gpt2_gpu_prefill(GPT2GpuModel *model,
+                     GPT2GpuKvCache *cache,
+                     const int *tokens,
+                     size_t sequence_length,
+                     float *logits);
+
+// One generation step. `token` is the newest token, the one the model just predicted. It is
+// not in the cache yet. It gets position `length`, its K and V are stored, `length` grows by
+// one, and the logits for the token after it are written.
+// The cache must hold at least one token (call gpt2_gpu_prefill first) and must not be full.
+// timer may be NULL. Returns 1 on success and 0 for invalid input (cache unchanged).
+int gpt2_gpu_decode(
+    GPT2GpuModel *model, GPT2GpuKvCache *cache, int token, float *logits, GpuTimer *timer);
 
 #ifdef __cplusplus
 }

@@ -79,6 +79,25 @@ void transformer_block_device(const float *d_input,
                               GpuTimer *timer,
                               int layer);
 
+// One block for ONE new token (decoding). All pointers are GPU pointers.
+// d_input and d_out are single rows [hidden_size] and must be different buffers.
+// The token's K and V are written to row `position` of cache_k and cache_v
+// (each [positions, hidden_size]); then it attends to rows 0..position.
+// The scratch buffers need at least one row.
+void transformer_block_decode_device(const float *d_input,
+                                     float *d_out,
+                                     const TransformerBlockWeights *d_weights,
+                                     const TransformerBlockScratch *scratch,
+                                     float *cache_k,
+                                     float *cache_v,
+                                     size_t position,
+                                     size_t hidden_size,
+                                     size_t n_heads,
+                                     size_t mlp_size,
+                                     float epsilon,
+                                     GpuTimer *timer,
+                                     int layer);
+
 // Copies everything to the GPU, runs one block, and copies the result back.
 void transformer_block_gpu(const float *input,
                            float *out,

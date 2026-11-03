@@ -20,11 +20,42 @@ class FakeTokenizer:
         return "".join(" ok" for token in token_ids if token == 2)
 
 
-class FakeEngine:
-    def forward_last(self, token_ids: np.ndarray) -> np.ndarray:
+class FakeSession:
+    """Predicts token 2 after a one-token prompt and token 0 (EOS) after that."""
+
+    def __init__(self) -> None:
+        self.length = 0
+        self.closed = False
+        self.prefill_calls = 0
+        self.decode_calls = 0
+
+    def _logits(self) -> np.ndarray:
         logits = np.zeros(5, dtype=np.float32)
-        logits[2 if token_ids.size == 1 else 0] = 1.0
+        logits[2 if self.length == 1 else 0] = 1.0
         return logits
+
+    def prefill(self, token_ids: np.ndarray) -> np.ndarray:
+        self.prefill_calls += 1
+        self.length = int(token_ids.size)
+        return self._logits()
+
+    def decode(self, token_id: int) -> np.ndarray:
+        self.decode_calls += 1
+        self.length += 1
+        return self._logits()
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class FakeEngine:
+    def __init__(self) -> None:
+        self.sessions: list[FakeSession] = []
+
+    def open_session(self) -> FakeSession:
+        session = FakeSession()
+        self.sessions.append(session)
+        return session
 
 
 @pytest.fixture
@@ -105,18 +136,34 @@ class SplitCharTokenizer(FakeTokenizer):
         return ""
 
 
+class ScriptedSession(FakeSession):
+    """Predicts the given token ids one after another."""
+
+    def __init__(self, script: list[int]) -> None:
+        super().__init__()
+        self.script = script
+        self.step = 0
+
+    def _logits(self) -> np.ndarray:
+        logits = np.zeros(5, dtype=np.float32)
+        logits[self.script[min(self.step, len(self.script) - 1)]] = 1.0
+        self.step += 1
+        return logits
+
+
+class ScriptedEngine:
+    def __init__(self, script: list[int]) -> None:
+        self.script = script
+        self.sessions: list[ScriptedSession] = []
+
+    def open_session(self) -> ScriptedSession:
+        session = ScriptedSession(self.script)
+        self.sessions.append(session)
+        return session
+
+
 def test_stream_holds_back_incomplete_characters() -> None:
-    class Engine:
-        def __init__(self) -> None:
-            self.calls = 0
-
-        def forward_last(self, token_ids: np.ndarray) -> np.ndarray:
-            logits = np.zeros(5, dtype=np.float32)
-            logits[[3, 4][self.calls]] = 1.0
-            self.calls += 1
-            return logits
-
-    service = InferenceService(Engine(), SplitCharTokenizer())
+    service = InferenceService(ScriptedEngine([3, 4]), SplitCharTokenizer())
     events = list(service.generate_stream("hi", 2))
     assert [e.token for e in events[:2] if isinstance(e, TokenEvent)] == ["", "é"]
     final = events[-1]
@@ -124,15 +171,8 @@ def test_stream_holds_back_incomplete_characters() -> None:
     assert final.completion == "é"
 
 
-class NeverStopsEngine:
-    def forward_last(self, token_ids: np.ndarray) -> np.ndarray:
-        logits = np.zeros(5, dtype=np.float32)
-        logits[2] = 1.0
-        return logits
-
-
 def test_no_limit_runs_until_context_is_full() -> None:
-    service = InferenceService(NeverStopsEngine(), FakeTokenizer())
+    service = InferenceService(ScriptedEngine([2]), FakeTokenizer())
     events = list(service.generate_stream("hello", None))
     final = events[-1]
     assert isinstance(final, DoneEvent)
@@ -141,7 +181,43 @@ def test_no_limit_runs_until_context_is_full() -> None:
 
 
 def test_limit_above_old_cap_is_accepted_and_reports_length() -> None:
-    service = InferenceService(NeverStopsEngine(), FakeTokenizer())
+    service = InferenceService(ScriptedEngine([2]), FakeTokenizer())
     final = service.generate("hello", 100)
     assert final.generated_tokens == 100
     assert final.finish_reason == "length"
+
+
+def test_prompt_is_prefilled_once_and_every_other_token_is_decoded() -> None:
+    engine = ScriptedEngine([2])
+    final = InferenceService(engine, FakeTokenizer()).generate("hello", 5)
+    assert final.generated_tokens == 5
+    (session,) = engine.sessions
+    assert session.prefill_calls == 1
+    # The last generated token is not fed back, so 5 tokens need 4 decode steps.
+    assert session.decode_calls == 4
+    assert session.closed
+
+
+def test_session_is_closed_after_normal_completion_and_after_errors() -> None:
+    engine = FakeEngine()
+    InferenceService(engine, FakeTokenizer()).generate("hello", 3)
+    assert engine.sessions[0].closed
+
+    class Failing(FakeSession):
+        def decode(self, token_id: int) -> np.ndarray:
+            raise RuntimeError("boom")
+
+    failing = Failing()
+    broken = type("Broken", (), {"open_session": lambda self: failing})()
+    with pytest.raises(RuntimeError):
+        InferenceService(broken, FakeTokenizer()).generate("hello", 5)
+    assert failing.closed
+
+
+def test_session_is_closed_when_the_client_leaves_early() -> None:
+    engine = ScriptedEngine([2])
+    events = InferenceService(engine, FakeTokenizer()).generate_stream("hello", None)
+    next(events)
+    assert not engine.sessions[0].closed
+    events.close()
+    assert engine.sessions[0].closed

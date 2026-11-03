@@ -1,8 +1,10 @@
 // Benchmark for the GPT-2 engine. Run it with `make bench-gpu` or `make bench-cpu`.
 //
-// What it measures (all without a KV cache, as the engine works today):
+// What it measures:
 //   prefill  one forward pass over N tokens. Time to the logits of the last token.
-//   decode   K greedy steps. Each step runs a forward pass over the whole sequence.
+//   decode   K greedy steps. Without --kv-cache each step runs a forward pass over the whole
+//            sequence. With --kv-cache (GPU only) the prompt is prefilled once and each step
+//            processes one token against the cached K and V.
 //   stages   (GPU only) GPU time per kind of kernel, summed over all layers.
 // Before it measures, the GPU result is compared with the CPU result.
 
@@ -38,6 +40,7 @@ typedef struct {
     int runs;
     int check;
     int profile;
+    int kv_cache;
 } Options;
 
 typedef struct {
@@ -99,7 +102,7 @@ static void make_prompt(int *tokens, size_t count) {
 }
 
 static int parse_options(int argc, char **argv, Options *options) {
-    Options defaults = {"gpu", DEFAULT_WEIGHTS, NULL, 32, 16, 2, 5, 1, 0};
+    Options defaults = {"gpu", DEFAULT_WEIGHTS, NULL, 32, 16, 2, 5, 1, 0, 0};
     *options = defaults;
     for (int index = 1; index < argc; index++) {
         const char *name = argv[index];
@@ -108,6 +111,8 @@ static int parse_options(int argc, char **argv, Options *options) {
             options->check = 0;
         } else if (strcmp(name, "--profile") == 0) {
             options->profile = 1;
+        } else if (strcmp(name, "--kv-cache") == 0) {
+            options->kv_cache = 1;
         } else if (!has_value) {
             fprintf(stderr, "missing value for %s\n", name);
             return 0;
@@ -129,6 +134,10 @@ static int parse_options(int argc, char **argv, Options *options) {
             fprintf(stderr, "unknown option %s\n", name);
             return 0;
         }
+    }
+    if (options->kv_cache && strcmp(options->backend, "gpu") != 0) {
+        fprintf(stderr, "--kv-cache needs --backend gpu\n");
+        return 0;
     }
     int backend_ok = strcmp(options->backend, "gpu") == 0 || strcmp(options->backend, "cpu") == 0;
     if (!backend_ok || options->prompt_tokens < 1 || options->runs < 1 || options->warmup < 0 ||
@@ -201,15 +210,24 @@ static double measure_decode(const Backend *backend,
     memcpy(sequence, prompt, options->prompt_tokens * sizeof(int));
     size_t length = options->prompt_tokens;
     double total = 0.0;
+    GPT2GpuKvCache *cache = options->kv_cache ? gpt2_gpu_kv_cache_create() : NULL;
     for (size_t step = 0; step < options->decode_tokens; step++) {
         double start = now_ms();
-        run_forward(backend, sequence, length, logits, NULL);
+        if (cache == NULL) {
+            run_forward(backend, sequence, length, logits, NULL);
+        } else if (step == 0) {
+            // The first token needs the whole prompt, so step 0 includes the prefill.
+            gpt2_gpu_prefill(backend->gpu_model, cache, sequence, length, logits);
+        } else {
+            gpt2_gpu_decode(backend->gpu_model, cache, sequence[length - 1], logits, NULL);
+        }
         sequence[length++] = argmax(logits, GPT2_N_VOCAB);
         double elapsed = now_ms() - start;
         *first_step_ms = step == 0 ? elapsed : *first_step_ms;
         *last_step_ms = elapsed;
         total += elapsed;
     }
+    gpt2_gpu_kv_cache_free(cache);
     free(sequence);
     free(logits);
     return total;
@@ -270,8 +288,9 @@ static void print_context(const Options *options) {
                info.compute_major, info.compute_minor, info.multiprocessors,
                info.memory_bytes / 1e9, info.runtime_version, info.driver_version);
     }
-    printf("workload   prompt=%zu tokens, decode=%zu tokens, warmup=%d, runs=%d\n",
-           options->prompt_tokens, options->decode_tokens, options->warmup, options->runs);
+    printf("workload   prompt=%zu tokens, decode=%zu tokens, warmup=%d, runs=%d, kv cache=%s\n",
+           options->prompt_tokens, options->decode_tokens, options->warmup, options->runs,
+           options->kv_cache ? "on" : "off");
 }
 
 static void write_json(const Options *options,
@@ -291,6 +310,7 @@ static void write_json(const Options *options,
         fprintf(file, "  \"gpu\": \"%s\",\n  \"compute\": \"sm_%d%d\",\n", info.name,
                 info.compute_major, info.compute_minor);
     }
+    fprintf(file, "  \"kv_cache\": %s,\n", options->kv_cache ? "true" : "false");
     fprintf(file, "  \"prompt_tokens\": %zu,\n  \"decode_tokens\": %zu,\n  \"runs\": %d,\n",
             options->prompt_tokens, options->decode_tokens, options->runs);
     fprintf(file, "  \"prefill_ms\": {\"median\": %.4f, \"min\": %.4f, \"mean\": %.4f},\n",

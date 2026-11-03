@@ -14,13 +14,16 @@ void embed_tokens(float *out,
                   size_t n_tokens,
                   size_t n_embd);
 
-// All pointers are GPU pointers. Needs n_tokens rows of position_embedding.
+// All pointers are GPU pointers. Token i gets position_offset + i. A prompt starts at 0.
+// A token that is generated after a cache of `length` tokens has position_offset = length.
+// Needs position_offset + n_tokens rows of position_embedding.
 void embed_tokens_device(float *d_out,
                          const int *d_tokens,
                          const float *d_token_embedding,
                          const float *d_position_embedding,
                          size_t n_tokens,
-                         size_t n_embd);
+                         size_t n_embd,
+                         size_t position_offset);
 
 void embed_tokens_gpu(float *out,
                       const int *tokens,

@@ -159,6 +159,22 @@ void gpt2_gpu_kv_cache_reset(GPT2GpuKvCache *cache) {
     }
 }
 
+size_t gpt2_gpu_kv_cache_length(const GPT2GpuKvCache *cache) {
+    return cache == NULL ? 0 : cache->length;
+}
+
+int gpt2_gpu_kv_cache_copy_layer(
+    const GPT2GpuKvCache *cache, size_t layer, size_t rows, float *k_out, float *v_out) {
+    if (cache == NULL || layer >= GPT2_N_LAYER || rows > cache->length || k_out == NULL ||
+        v_out == NULL) {
+        return 0;
+    }
+    size_t bytes = rows * GPT2_N_EMBD * sizeof(float);
+    CUDA_CHECK(cudaMemcpy(k_out, cache->k[layer], bytes, cudaMemcpyDeviceToHost));
+    CUDA_CHECK(cudaMemcpy(v_out, cache->v[layer], bytes, cudaMemcpyDeviceToHost));
+    return 1;
+}
+
 static int tokens_are_valid(const int *tokens, size_t sequence_length) {
     if (tokens == NULL || sequence_length == 0 || sequence_length > GPT2_N_POSITIONS) {
         return 0;
@@ -171,12 +187,25 @@ static int tokens_are_valid(const int *tokens, size_t sequence_length) {
     return 1;
 }
 
-int gpt2_gpu_forward_last(GPT2GpuModel *model,
-                          const int *tokens,
-                          size_t sequence_length,
-                          float *logits,
-                          float *block_outputs,
-                          GpuTimer *timer) {
+// Copies K and V of one layer from the scratch buffers into the cache. Call it right after the
+// block ran: the next layer overwrites the scratch buffers.
+static void store_layer_in_cache(const GPT2GpuModel *model,
+                                 GPT2GpuKvCache *cache,
+                                 size_t layer,
+                                 size_t sequence_length) {
+    size_t bytes = sequence_length * GPT2_N_EMBD * sizeof(float);
+    CUDA_CHECK(cudaMemcpyAsync(cache->k[layer], model->scratch.k, bytes, cudaMemcpyDeviceToDevice));
+    CUDA_CHECK(cudaMemcpyAsync(cache->v[layer], model->scratch.v, bytes, cudaMemcpyDeviceToDevice));
+}
+
+// The forward pass. If cache is not NULL, it also saves K and V of every layer and token.
+static int forward_pass(GPT2GpuModel *model,
+                        GPT2GpuKvCache *cache,
+                        const int *tokens,
+                        size_t sequence_length,
+                        float *logits,
+                        float *block_outputs,
+                        GpuTimer *timer) {
     if (model == NULL || logits == NULL || !tokens_are_valid(tokens, sequence_length)) {
         return 0;
     }
@@ -187,7 +216,7 @@ int gpt2_gpu_forward_last(GPT2GpuModel *model,
 
     gpu_timer_begin(timer, GPU_STAGE_EMBED, -1);
     embed_tokens_device(model->hidden, model->tokens, model->token_embedding,
-                        model->position_embedding, sequence_length, GPT2_N_EMBD);
+                        model->position_embedding, sequence_length, GPT2_N_EMBD, 0);
     gpu_timer_end(timer);
 
     for (size_t layer = 0; layer < GPT2_N_LAYER; layer++) {
@@ -197,6 +226,10 @@ int gpt2_gpu_forward_last(GPT2GpuModel *model,
         float *temporary = model->hidden;
         model->hidden = model->next_hidden;
         model->next_hidden = temporary;
+
+        if (cache != NULL) {
+            store_layer_in_cache(model, cache, layer, sequence_length);
+        }
 
         if (block_outputs != NULL) {
             CUDA_CHECK(cudaMemcpy(block_outputs + layer * hidden_elements, model->hidden,
@@ -218,6 +251,73 @@ int gpt2_gpu_forward_last(GPT2GpuModel *model,
 
     CUDA_CHECK(
         cudaMemcpy(logits, model->logits, GPT2_N_VOCAB * sizeof(float), cudaMemcpyDeviceToHost));
+    return 1;
+}
+
+int gpt2_gpu_forward_last(GPT2GpuModel *model,
+                          const int *tokens,
+                          size_t sequence_length,
+                          float *logits,
+                          float *block_outputs,
+                          GpuTimer *timer) {
+    return forward_pass(model, NULL, tokens, sequence_length, logits, block_outputs, timer);
+}
+
+int gpt2_gpu_prefill(GPT2GpuModel *model,
+                     GPT2GpuKvCache *cache,
+                     const int *tokens,
+                     size_t sequence_length,
+                     float *logits) {
+    if (cache == NULL) {
+        return 0;
+    }
+    // Invalid input is rejected before anything is written, so the cache stays as it was.
+    if (!forward_pass(model, cache, tokens, sequence_length, logits, NULL, NULL)) {
+        return 0;
+    }
+    cache->length = sequence_length;
+    return 1;
+}
+
+int gpt2_gpu_decode(
+    GPT2GpuModel *model, GPT2GpuKvCache *cache, int token, float *logits, GpuTimer *timer) {
+    if (model == NULL || cache == NULL || logits == NULL || token < 0 || token >= GPT2_N_VOCAB ||
+        cache->length == 0 || cache->length >= GPT2_N_POSITIONS) {
+        return 0;
+    }
+    size_t position = cache->length;
+
+    CUDA_CHECK(cudaMemcpy(model->tokens, &token, sizeof(int), cudaMemcpyHostToDevice));
+
+    gpu_timer_begin(timer, GPU_STAGE_EMBED, -1);
+    embed_tokens_device(model->hidden, model->tokens, model->token_embedding,
+                        model->position_embedding, 1, GPT2_N_EMBD, position);
+    gpu_timer_end(timer);
+
+    for (size_t layer = 0; layer < GPT2_N_LAYER; layer++) {
+        transformer_block_decode_device(model->hidden, model->next_hidden, &model->blocks[layer],
+                                        &model->scratch, cache->k[layer], cache->v[layer], position,
+                                        GPT2_N_EMBD, GPT2_N_HEAD, GPT2_N_INNER, LAYERNORM_EPSILON,
+                                        timer, (int)layer);
+        float *temporary = model->hidden;
+        model->hidden = model->next_hidden;
+        model->next_hidden = temporary;
+    }
+
+    // The hidden state is a single row, so it goes straight through the head.
+    gpu_timer_begin(timer, GPU_STAGE_LAYERNORM, -1);
+    layernorm_device(model->final_norm, model->hidden, model->final_ln_gamma, model->final_ln_beta,
+                     1, GPT2_N_EMBD, LAYERNORM_EPSILON);
+    gpu_timer_end(timer);
+
+    gpu_timer_begin(timer, GPU_STAGE_LM_HEAD, -1);
+    matrixmult_device(model->final_norm, model->lm_head, model->logits, 1, GPT2_N_EMBD,
+                      GPT2_N_VOCAB);
+    gpu_timer_end(timer);
+
+    CUDA_CHECK(
+        cudaMemcpy(logits, model->logits, GPT2_N_VOCAB * sizeof(float), cudaMemcpyDeviceToHost));
+    cache->length = position + 1;
     return 1;
 }
 

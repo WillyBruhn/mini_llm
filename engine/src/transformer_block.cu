@@ -168,6 +168,73 @@ void transformer_block_device(const float *d_input,
     gpu_timer_end(timer);
 }
 
+// One block for ONE new token during decoding. The scratch buffers need 1 row.
+// d_input is the token's hidden state [hidden]. cache_k and cache_v are this layer's cached
+// rows. The token's own K and V are written to row `position`, then it attends to rows
+// 0..position. d_input and d_out must be different buffers.
+void transformer_block_decode_device(const float *d_input,
+                                     float *d_out,
+                                     const TransformerBlockWeights *w,
+                                     const TransformerBlockScratch *s,
+                                     float *cache_k,
+                                     float *cache_v,
+                                     size_t position,
+                                     size_t hidden_size,
+                                     size_t n_heads,
+                                     size_t mlp_size,
+                                     float epsilon,
+                                     GpuTimer *timer,
+                                     int layer) {
+    float *row_k = cache_k + position * hidden_size;
+    float *row_v = cache_v + position * hidden_size;
+
+    gpu_timer_begin(timer, GPU_STAGE_LAYERNORM, layer);
+    layernorm_device(s->ln1, d_input, w->ln1_gamma, w->ln1_beta, 1, hidden_size, epsilon);
+    gpu_timer_end(timer);
+
+    // K and V go straight into their cache row. Q is only needed for this token.
+    gpu_timer_begin(timer, GPU_STAGE_QKV, layer);
+    linear_device(s->ln1, w->query_weights, w->query_bias, s->q, 1, hidden_size, hidden_size);
+    linear_device(s->ln1, w->key_weights, w->key_bias, row_k, 1, hidden_size, hidden_size);
+    linear_device(s->ln1, w->value_weights, w->value_bias, row_v, 1, hidden_size, hidden_size);
+    gpu_timer_end(timer);
+
+    gpu_timer_begin(timer, GPU_STAGE_ATTENTION, layer);
+    decode_attention_device(s->q, cache_k, cache_v, s->attention, position + 1, n_heads,
+                            hidden_size / n_heads);
+    gpu_timer_end(timer);
+
+    gpu_timer_begin(timer, GPU_STAGE_ATTN_PROJ, layer);
+    linear_device(s->attention, w->attention_weights, w->attention_bias, s->projected, 1,
+                  hidden_size, hidden_size);
+    gpu_timer_end(timer);
+
+    gpu_timer_begin(timer, GPU_STAGE_RESIDUAL_ADD, layer);
+    vectoraddition_device(d_input, s->projected, s->residual, hidden_size);
+    gpu_timer_end(timer);
+
+    gpu_timer_begin(timer, GPU_STAGE_LAYERNORM, layer);
+    layernorm_device(s->ln2, s->residual, w->ln2_gamma, w->ln2_beta, 1, hidden_size, epsilon);
+    gpu_timer_end(timer);
+
+    gpu_timer_begin(timer, GPU_STAGE_MLP_UP, layer);
+    linear_device(s->ln2, w->mlp_up_weights, w->mlp_up_bias, s->mlp_up, 1, hidden_size, mlp_size);
+    gpu_timer_end(timer);
+
+    gpu_timer_begin(timer, GPU_STAGE_GELU, layer);
+    gelu_new_device(s->mlp_activated, s->mlp_up, mlp_size);
+    gpu_timer_end(timer);
+
+    gpu_timer_begin(timer, GPU_STAGE_MLP_DOWN, layer);
+    linear_device(s->mlp_activated, w->mlp_down_weights, w->mlp_down_bias, d_out, 1, mlp_size,
+                  hidden_size);
+    gpu_timer_end(timer);
+
+    gpu_timer_begin(timer, GPU_STAGE_RESIDUAL_ADD, layer);
+    vectoraddition_device(s->residual, d_out, d_out, hidden_size);
+    gpu_timer_end(timer);
+}
+
 // Test helper: copies everything to the GPU, runs one block, copies the result back.
 void transformer_block_gpu(const float *input,
                            float *out,

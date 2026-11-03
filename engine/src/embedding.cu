@@ -9,7 +9,8 @@ __global__ void embed_tokens_kernel(float *out,
                                     const float *token_embedding,
                                     const float *position_embedding,
                                     size_t n_tokens,
-                                    size_t n_embd) {
+                                    size_t n_embd,
+                                    size_t position_offset) {
     size_t index = blockIdx.x * blockDim.x + threadIdx.x;
     size_t total = n_tokens * n_embd;
 
@@ -21,8 +22,8 @@ __global__ void embed_tokens_kernel(float *out,
     size_t dim = index % n_embd;
     int token_id = tokens[token_index];
 
-    out[index] =
-        token_embedding[token_id * n_embd + dim] + position_embedding[token_index * n_embd + dim];
+    out[index] = token_embedding[token_id * n_embd + dim] +
+                 position_embedding[(position_offset + token_index) * n_embd + dim];
 }
 
 void embed_tokens_device(float *d_out,
@@ -30,13 +31,15 @@ void embed_tokens_device(float *d_out,
                          const float *d_token_embedding,
                          const float *d_position_embedding,
                          size_t n_tokens,
-                         size_t n_embd) {
+                         size_t n_embd,
+                         size_t position_offset) {
     size_t out_count = n_tokens * n_embd;
     int threads_per_block = 256;
     int blocks = (int)ceil_div(out_count, threads_per_block);
 
     embed_tokens_kernel<<<blocks, threads_per_block>>>(d_out, d_tokens, d_token_embedding,
-                                                       d_position_embedding, n_tokens, n_embd);
+                                                       d_position_embedding, n_tokens, n_embd,
+                                                       position_offset);
     CUDA_CHECK_LAUNCH();
 }
 
@@ -70,7 +73,8 @@ void embed_tokens_gpu(float *out,
     CUDA_CHECK(cudaMemcpy(d_position_embedding, position_embedding, position_embedding_bytes,
                           cudaMemcpyHostToDevice));
 
-    embed_tokens_device(d_out, d_tokens, d_token_embedding, d_position_embedding, n_tokens, n_embd);
+    embed_tokens_device(d_out, d_tokens, d_token_embedding, d_position_embedding, n_tokens, n_embd,
+                        0);
 
     CUDA_CHECK(cudaDeviceSynchronize());
 

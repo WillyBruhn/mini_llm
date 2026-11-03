@@ -1,6 +1,7 @@
 """FastAPI server for greedy generation with the native C GPT-2 engine."""
 
 import argparse
+import contextlib
 import logging
 import time
 from collections.abc import AsyncIterator, Generator
@@ -32,8 +33,18 @@ logger = logging.getLogger(__name__)
 MAX_CONTEXT = 1024
 
 
+class Session(Protocol):
+    """One generation. prefill() reads the prompt, decode() adds one token."""
+
+    def prefill(self, token_ids: np.ndarray) -> np.ndarray: ...
+
+    def decode(self, token_id: int) -> np.ndarray: ...
+
+    def close(self) -> None: ...
+
+
 class InferenceEngine(Protocol):
-    def forward_last(self, token_ids: np.ndarray) -> np.ndarray: ...
+    def open_session(self) -> Session: ...
 
 
 class Tokenizer(Protocol):
@@ -92,33 +103,40 @@ class InferenceService:
         token_times: list[float] = []
         emitted_chars = 0
         started = time.perf_counter()
-
         finish_reason: Literal["stop", "length", "context"] = "length"
-        while max_new_tokens is None or len(generated) < max_new_tokens:
-            if len(tokens) >= MAX_CONTEXT:
-                finish_reason = "context"
-                break
-            input_ids = np.asarray(tokens, dtype=np.int32)
-            logits = self.engine.forward_last(input_ids)
-            next_token = int(np.argmax(logits))
-            now = time.perf_counter() - started
-            generated.append(next_token)
-            token_times.append(now)
 
-            # A multi-byte character can span several tokens. Decode the whole
-            # list and hold back text that ends with a replacement character.
-            text = self.tokenizer.decode(generated, skip_special_tokens=True)
-            if text.endswith("\ufffd"):
-                delta = ""
-            else:
-                delta = text[emitted_chars:]
-                emitted_chars = len(text)
-            yield TokenEvent(token=delta, token_id=next_token, t=now)
+        # The session is closed when the generator ends or is closed (the client left).
+        # That gives its KV cache back.
+        with contextlib.closing(self.engine.open_session()) as session:
+            # The first call reads the whole prompt, the next calls add one token each.
+            # Opening the session may wait for a free KV cache, and that wait counts
+            # towards the time to first token.
+            logits = session.prefill(np.asarray(tokens, dtype=np.int32))
+            while max_new_tokens is None or len(generated) < max_new_tokens:
+                next_token = int(np.argmax(logits))
+                now = time.perf_counter() - started
+                generated.append(next_token)
+                token_times.append(now)
 
-            if next_token == self.tokenizer.eos_token_id:
-                finish_reason = "stop"
-                break
-            tokens.append(next_token)
+                # A multi-byte character can span several tokens. Decode the whole
+                # list and hold back text that ends with a replacement character.
+                text = self.tokenizer.decode(generated, skip_special_tokens=True)
+                if text.endswith("\ufffd"):
+                    delta = ""
+                else:
+                    delta = text[emitted_chars:]
+                    emitted_chars = len(text)
+                yield TokenEvent(token=delta, token_id=next_token, t=now)
+
+                if next_token == self.tokenizer.eos_token_id:
+                    finish_reason = "stop"
+                    break
+                if len(tokens) + len(generated) >= MAX_CONTEXT:
+                    finish_reason = "context"
+                    break
+                if max_new_tokens is not None and len(generated) >= max_new_tokens:
+                    break  # the loop ends. Do not compute logits that nobody reads
+                logits = session.decode(next_token)
 
         completion = self.tokenizer.decode(generated, skip_special_tokens=True)
         total = time.perf_counter() - started
@@ -246,6 +264,17 @@ def parse_args() -> argparse.Namespace:
         help="Native shared library. Default: build/libmini_llm_inference.so (cpu) "
         "or build/libmini_llm_gpu.so (gpu)",
     )
+    parser.add_argument(
+        "--no-kv-cache",
+        action="store_true",
+        help="Recompute the whole sequence at every step (the slow baseline)",
+    )
+    parser.add_argument(
+        "--max-sessions",
+        type=int,
+        default=32,
+        help="Generations that may run at the same time. Each holds a 72 MB KV cache",
+    )
     return parser.parse_args()
 
 
@@ -260,8 +289,17 @@ def main() -> None:
     tokenizer = AutoTokenizer.from_pretrained(  # type: ignore[no-untyped-call]
         args.model, local_files_only=True, use_fast=True
     )
-    engine = NativeGPT2(args.weights, args.library, args.backend)
-    service = InferenceService(engine, tokenizer, f"gpt2-small-native-{args.backend}")
+    engine = NativeGPT2(
+        args.weights,
+        args.library,
+        args.backend,
+        use_kv_cache=not args.no_kv_cache,
+        max_sessions=args.max_sessions,
+    )
+    suffix = "-kvcache" if engine.use_kv_cache else ""
+    service = InferenceService(
+        engine, tokenizer, f"gpt2-small-native-{args.backend}{suffix}"
+    )
     try:
         uvicorn.run(create_app(service), host=args.host, port=args.port)
     finally:

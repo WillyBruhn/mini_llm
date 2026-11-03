@@ -9,46 +9,82 @@ Intermediate Goal: Learn to use nsys and ncu proerly and learn which optimizatio
 
 ## So far ...
 
-GPT-2 Small, fp32, RTX 3060, 32-token prompt, greedy decoding, no KV cache.
+GPT-2 Small, fp32, RTX 3060, 32-token prompt, greedy decoding, 16 decode tokens. No KV cache until the last row.
 
 | Step | Prefill (32 tokens) | Decode | Report |
 |---|---|---|---|
 | CPU (8-token prompt, not the same workload) | 1959 ms | 0.44 tok/s | – |
 | GPU, first version | 174 ms | 3.4 tok/s | [001](docs/001_baseline.md) |
 | + attention kernel: online softmax, one pass over the keys | 43.3 ms | 17.0 tok/s | [001](docs/001_baseline.md) |
-| + matmul kernel: coalesced memory access | **22.5 ms** | **35.5 tok/s** | [002](docs/002_mult_kernel.md) |
+| + matmul kernel: coalesced memory access | 22.5 ms | 35.5 tok/s | [002](docs/002_mult_kernel.md) |
+| + KV cache and a parallel decode attention kernel | 22.2 ms (unchanged) | **86.7 tok/s** | [003](docs/003_kv_cache.md) |
 
 - Since the first GPU version: prefill is **7.7x** faster and decode is **10x** faster.
 - Attention kernel: 16.9 ms → 0.81 ms (**21x**), found with Nsight Compute (one loop did the same dot product 64 times).
 - Matmul kernel: 1.14 ms → 0.29 ms (**3.9x**) from a two-line change of the thread mapping. 71% of the memory sectors were wasted.
 - Each prediction was written before the change. The results are in the reports.
 
-Where the time goes now (one forward pass, 21 ms): attention 30%, layernorm 20%, matmul 49%.
+Where the time goes now (one forward pass without the cache, 22 ms): attention 29%, layernorm 20%, matmul 50%.
 
-## Serving baseline
+The decode column of the last row is for 16 tokens. Without a KV cache the decode speed falls as the output gets longer (34.7 tok/s for 16 tokens, 2.7 tok/s for 900). With the cache it stays at 88 to 93 tok/s.
 
-Closed-loop load test with `scripts/benchmark_throughput.py`: N concurrent users, each sends 3 requests one after another. Streaming, 16 new tokens per request, short prompts, same GPU as above. The server is FastAPI with one engine and no KV cache, no batching: requests are processed one at a time.
+## Serving
+
+Closed-loop load test with `scripts/benchmark_throughput.py`: N concurrent users, each sends requests one after another. Streaming, short prompts, same GPU as above. The server is FastAPI with one engine. Requests are processed one at a time, there is no batching yet.
+
+### Baseline: no KV cache (`--no-kv-cache`)
+
+16 new tokens per request:
 
 | Users | Output tok/s | Req/s | TTFT p50 | TTFT p95 | Inter-token p50 | End-to-end p50 | End-to-end p95 |
 |---|---|---|---|---|---|---|---|
-| 1 | 59.3 | 3.71 | 18 ms | 19 ms | 16.5 ms | 0.27 s | 0.28 s |
-| 5 | 61.7 | 3.86 | 73 ms | 88 ms | 80.6 ms | 1.29 s | 1.35 s |
-| 10 | 61.2 | 3.83 | 145 ms | 182 ms | 163.0 ms | 2.59 s | 2.72 s |
-| 20 | 61.0 | 3.81 | 297 ms | 376 ms | 327.5 ms | 5.17 s | 5.36 s |
+| 1 | 59.6 | 3.72 | 18 ms | 19 ms | 16.4 ms | 0.27 s | 0.28 s |
+| 5 | 62.0 | 3.87 | 70 ms | 87 ms | 80.2 ms | 1.29 s | 1.34 s |
+| 10 | 61.1 | 3.82 | 145 ms | 184 ms | 163.4 ms | 2.59 s | 2.72 s |
+| 20 | 61.2 | 3.83 | 293 ms | 372 ms | 325.6 ms | 5.17 s | 5.35 s |
 
 ![Serving baseline](docs/images/003_serving_baseline.png)
 
 - Throughput is flat at about 60 tok/s: more users only add waiting time. Latency grows linearly with the number of users.
-- A single user gets the same ~60 tok/s as the engine alone. The py-spy profile shows most of the time waiting for the GPU (`cudaMemcpy` of the logits), so Python is not the bottleneck.
-- Without a KV cache every decode step runs the whole sequence again. One forward pass takes 11 ms for 1 token, 92 ms for 128 tokens and 895 ms for 1000 tokens.
-- GPU memory is about 0.9 GB and does not change with the load. There are no per-request buffers yet.
+- A single user gets the same speed as the engine alone. The py-spy profile shows most of the time waiting for the GPU (`cudaMemcpy` of the logits), so Python is not the bottleneck.
+- Every decode step runs the whole sequence again. One forward pass takes 11 ms for 1 token, 92 ms for 128 tokens and 895 ms for 1000 tokens.
+
+### With the KV cache ([report 003](docs/003_kv_cache.md))
+
+Same workload, only the cache is different. Speedup is output tok/s after / before.
+
+16 new tokens per request:
+
+| Users | tok/s before | tok/s after | Speedup | Inter-token p50 before | after | End-to-end p50 before | after |
+|---|---|---|---|---|---|---|---|
+| 1 | 59.6 | 83.5 | 1.4x | 16.4 ms | 11.4 ms | 0.27 s | 0.19 s |
+| 5 | 62.0 | 89.1 | 1.4x | 80.2 ms | 54.7 ms | 1.29 s | 0.89 s |
+| 10 | 61.1 | 89.8 | 1.5x | 163.4 ms | 108.9 ms | 2.59 s | 1.76 s |
+| 20 | 61.2 | 89.6 | 1.5x | 325.6 ms | 218.5 ms | 5.17 s | 3.53 s |
+
+128 new tokens per request:
+
+| Users | tok/s before | tok/s after | Speedup | Inter-token p50 before | after | End-to-end p50 before | after |
+|---|---|---|---|---|---|---|---|
+| 1 | 19.3 | 87.2 | 4.5x | 50.8 ms | 11.4 ms | 6.61 s | 1.46 s |
+| 5 | 19.3 | 90.7 | 4.7x | 252.4 ms | 55.0 ms | 32.73 s | 7.05 s |
+| 10 | 19.3 | 90.6 | 4.7x | 508.6 ms | 110.0 ms | 65.96 s | 14.08 s |
+| 20 | 19.3 | 90.9 | 4.7x | 1019.3 ms | 219.7 ms | 132.40 s | 28.08 s |
+
+![KV cache, 128 tokens](docs/images/003_kv_cache_128.png)
+
+- The longer the output, the bigger the gain: 1.4x at 16 tokens, 4.5x at 128 tokens. One sequence in the C benchmark (32-token prompt, `make bench-gpu`): 2.5x at 16 tokens, 14.6x at 400 and 32x at 900.
+- TTFT does not change (prefill is the same, about 18 ms).
+- Throughput is still flat when users are added (about 90 tok/s). The server still runs one request at a time, so batching is the next step.
+- GPU memory: 1.8 GB for the weights, then +96 MB for each running session (the KV cache). It is 3.7 GB with 20 sessions.
+- Reproduce: `make serve-gpu SERVE_ARGS=--no-kv-cache` (baseline) or `make serve-gpu` (cache), then `uv run --group dev scripts/benchmark_throughput.py --max-new-tokens 128`. `scripts/compare_benchmarks.py` draws two runs in one plot.
 
 ## Run
 
 ```sh
 make weights                  # export GPT-2 weights (needs models/gpt2)
 make gpt2-gpu-test test-gpu   # correctness first
-make bench-gpu                # tokens/s and time per stage
+make bench-gpu                # tokens/s and time per stage (add BENCH_ARGS="--kv-cache" for the cache)
 make profile-nsys             # timeline: build/report.nsys-rep
 make profile-ncu KERNEL=mult_kernel   # one kernel in detail
 make serve-gpu                # local server, then: uv run scripts/chat.py

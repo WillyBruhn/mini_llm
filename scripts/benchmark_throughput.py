@@ -275,7 +275,10 @@ async def main_async(args: argparse.Namespace) -> None:
     stem = f"throughput_{time.strftime('%Y%m%d_%H%M%S')}"
     config = {k: v for k, v in vars(args).items()}
     (out / f"{stem}.json").write_text(
-        json.dumps({"config": config, "levels": [asdict(r) for r in levels]}, indent=2)
+        json.dumps(
+            {"model": model, "config": config, "levels": [asdict(r) for r in levels]},
+            indent=2,
+        )
     )
     plot(levels, out / f"{stem}.png", f"{model}, max_new_tokens={args.max_new_tokens}")
     logger.info(f"Saved {out / stem}.json and .png")
