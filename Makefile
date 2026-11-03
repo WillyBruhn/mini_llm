@@ -5,6 +5,9 @@ LDFLAGS = -lm
 NVFLAGS = -O2 -lineinfo -gencode arch=compute_86,code=sm_86 -gencode arch=compute_61,code=sm_61 -Iengine/include -Iengine/tests
 BUILD   = build
 GPU     ?= 1
+# Number the GPUs like nvidia-smi does. Without this CUDA can use another order,
+# and GPU=1 would select a different card than `nvidia-smi -i 1`.
+export CUDA_DEVICE_ORDER = PCI_BUS_ID
 GIT_SHA := $(shell git rev-parse --short HEAD 2>/dev/null)$(shell git diff --quiet HEAD 2>/dev/null || echo -dirty)
 CUDA_SANITIZER ?= /usr/local/cuda-12.6
 
