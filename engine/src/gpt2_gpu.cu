@@ -31,6 +31,13 @@ struct GPT2GpuModel {
     float *logits;     // [1, vocab]
 };
 
+// K and V of every past token of one sequence, one buffer per layer.
+struct GPT2GpuKvCache {
+    float *k[GPT2_N_LAYER]; // each [positions, hidden], row = token position
+    float *v[GPT2_N_LAYER];
+    size_t length; // tokens stored so far
+};
+
 static float *upload(const float *host, size_t count) {
     float *device = NULL;
     CUDA_CHECK(cudaMalloc((void **)&device, count * sizeof(float)));
@@ -119,6 +126,37 @@ void gpt2_gpu_model_free(GPT2GpuModel *model) {
     CUDA_CHECK(cudaFree(model->final_norm));
     CUDA_CHECK(cudaFree(model->logits));
     free(model);
+}
+
+GPT2GpuKvCache *gpt2_gpu_kv_cache_create(void) {
+    GPT2GpuKvCache *cache = (GPT2GpuKvCache *)calloc(1, sizeof(*cache));
+    if (cache == NULL) {
+        fprintf(stderr, "failed to allocate the KV cache\n");
+        return NULL;
+    }
+    for (size_t layer = 0; layer < GPT2_N_LAYER; layer++) {
+        cache->k[layer] = allocate((size_t)GPT2_N_POSITIONS * GPT2_N_EMBD);
+        cache->v[layer] = allocate((size_t)GPT2_N_POSITIONS * GPT2_N_EMBD);
+    }
+    return cache;
+}
+
+void gpt2_gpu_kv_cache_free(GPT2GpuKvCache *cache) {
+    if (cache == NULL) {
+        return;
+    }
+    for (size_t layer = 0; layer < GPT2_N_LAYER; layer++) {
+        CUDA_CHECK(cudaFree(cache->k[layer]));
+        CUDA_CHECK(cudaFree(cache->v[layer]));
+    }
+    free(cache);
+}
+
+// Rows at or after `length` are never read, so the memory needs no clearing.
+void gpt2_gpu_kv_cache_reset(GPT2GpuKvCache *cache) {
+    if (cache != NULL) {
+        cache->length = 0;
+    }
 }
 
 static int tokens_are_valid(const int *tokens, size_t sequence_length) {

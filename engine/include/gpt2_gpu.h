@@ -43,6 +43,14 @@ typedef struct {
 // Describes the GPU that this process uses. Stored with every benchmark result.
 GpuDeviceInfo gpt2_gpu_device_info(void);
 
+// The K and V values of all past tokens, for one sequence.
+typedef struct GPT2GpuKvCache GPT2GpuKvCache;
+
+GPT2GpuKvCache *gpt2_gpu_kv_cache_create(void);
+void gpt2_gpu_kv_cache_free(GPT2GpuKvCache *cache);
+// Forget all tokens. Call this before you start a new sequence.
+void gpt2_gpu_kv_cache_reset(GPT2GpuKvCache *cache);
+
 #ifdef __cplusplus
 }
 #endif
