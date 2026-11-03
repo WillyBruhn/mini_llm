@@ -28,7 +28,7 @@
             "environment": [
                 { "name": "CUDA_VISIBLE_DEVICES", "value": "1" }
             ],
-            "debuggerPath": "/usr/local/cuda-13.4/bin/cuda-gdb",
+            "debuggerPath": "/usr/local/cuda/bin/cuda-gdb",
             "setupCommands": [
                 { "text": "set follow-fork-mode child", "ignoreFailures": true }
             ],
@@ -45,7 +45,7 @@
             "environment": [
                 { "name": "CUDA_VISIBLE_DEVICES", "value": "1" }
             ],
-            "debuggerPath": "/usr/local/cuda-13.4/bin/cuda-gdb",
+            "debuggerPath": "/usr/local/cuda/bin/cuda-gdb",
             "setupCommands": [
                 { "text": "set follow-fork-mode child", "ignoreFailures": true }
             ],
@@ -62,7 +62,7 @@
             "environment": [
                 { "name": "CUDA_VISIBLE_DEVICES", "value": "1" }
             ],
-            "debuggerPath": "/usr/local/cuda-13.4/bin/cuda-gdb",
+            "debuggerPath": "/usr/local/cuda/bin/cuda-gdb",
             "setupCommands": [
                 { "text": "set follow-fork-mode child", "ignoreFailures": true }
             ],

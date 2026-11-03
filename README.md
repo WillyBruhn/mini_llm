@@ -25,18 +25,6 @@ GPT-2 Small, fp32, RTX 3060, 32-token prompt, greedy decoding, no KV cache.
 
 Where the time goes now (one forward pass, 21 ms): attention 30%, layernorm 20%, matmul 49%.
 
-## Layout
-
-| Path | Content |
-|---|---|
-| `engine/src`, `engine/include` | C and CUDA code: layers, attention, matmul, GPT-2 model |
-| `engine/tests` | Tests against PyTorch reference data (CPU and GPU) |
-| `engine/bench` | Benchmark with a GPU time table per stage |
-| `scripts` | Weight export, reference dump, local server and chat client |
-| `docs` | One report per optimization step, with profiler screenshots |
-| `PROJECT_PLAN.md` | Plan and status |
-| `.local/profiling.md` | Profiling guide |
-
 ## Run
 
 ```sh
