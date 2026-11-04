@@ -17,7 +17,8 @@ GPT-2 Small, fp32, RTX 3060, 32-token prompt, greedy decoding, 16 decode tokens.
 | GPU, first version | 174 ms | 3.4 tok/s | [001](docs/001_baseline.md) |
 | + attention kernel: online softmax, one pass over the keys | 43.3 ms | 17.0 tok/s | [001](docs/001_baseline.md) |
 | + matmul kernel: coalesced memory access | 22.5 ms | 35.5 tok/s | [002](docs/002_mult_kernel.md) |
-| + KV cache and a parallel decode attention kernel | 22.2 ms (unchanged) | **86.7 tok/s** | [003](docs/003_kv_cache.md) |
+| + KV cache and a parallel decode attention kernel | 22.2 ms (unchanged) | 86.7 tok/s | [003](docs/003_kv_cache.md) |
+| + matrix-vector kernel for single-row products (decode) | 21.9 ms (unchanged) | **204.8 tok/s** | [004](docs/004_gemv.md) |
 
 - Since the first GPU version: prefill is **7.7x** faster and decode is **10x** faster.
 - Attention kernel: 16.9 ms → 0.81 ms (**21x**), found with Nsight Compute (one loop did the same dot product 64 times).
@@ -26,7 +27,7 @@ GPT-2 Small, fp32, RTX 3060, 32-token prompt, greedy decoding, 16 decode tokens.
 
 Where the time goes now (one forward pass without the cache, 22 ms): attention 29%, layernorm 20%, matmul 50%.
 
-The decode column of the last row is for 16 tokens. Without a KV cache the decode speed falls as the output gets longer (34.7 tok/s for 16 tokens, 2.7 tok/s for 900). With the cache it stays at 88 to 93 tok/s.
+The decode column of the last row is for 16 tokens. Without a KV cache the decode speed falls as the output gets longer (34.7 tok/s for 16 tokens, 2.7 tok/s for 900). With the cache it stays flat: 88 to 93 tok/s with the matrix-matrix kernel, 222 to 247 tok/s with the matrix-vector kernel.
 
 ## Serving
 
@@ -79,6 +80,25 @@ Same workload, only the cache is different. Speedup is output tok/s after / befo
 - GPU memory: 1.8 GB for the weights, then +96 MB for each running session (the KV cache). It is 3.7 GB with 20 sessions.
 - Reproduce: `make serve-gpu SERVE_ARGS=--no-kv-cache` (baseline) or `make serve-gpu` (cache), then `uv run --group dev scripts/benchmark_throughput.py --max-new-tokens 128`. `scripts/compare_benchmarks.py` draws two runs in one plot.
 
+### With the matrix-vector kernel ([report 004](docs/004_gemv.md))
+
+The decode step multiplies one row by a weight matrix. The old matmul kernel left 15 of 16 thread rows idle in that case and read the weights at 31 to 62 GB/s (ncu: no warp ready to issue in 94% of the cycles). A separate kernel for one row splits `K` over 16 slices per block, keeps 4 loads in flight per thread and reads the weights at 267 GB/s (74% of the peak). Same workload, KV cache on in both columns:
+
+128 new tokens per request:
+
+| Users | tok/s before | tok/s after | Speedup | Inter-token p50 before | after | End-to-end p50 before | after |
+|---|---|---|---|---|---|---|---|
+| 1 | 87.2 | 216.4 | 2.5x | 11.4 ms | 4.5 ms | 1.46 s | 0.58 s |
+| 5 | 90.7 | 237.0 | 2.6x | 55.0 ms | 20.7 ms | 7.05 s | 2.69 s |
+| 10 | 90.6 | 237.6 | 2.6x | 110.0 ms | 41.2 ms | 14.08 s | 5.37 s |
+| 20 | 90.9 | 237.2 | 2.6x | 219.7 ms | 82.6 ms | 28.08 s | 10.75 s |
+
+![Matrix-vector kernel, 128 tokens](docs/images/004_gemv_128.png)
+
+- One decode step: 10.67 ms → 3.88 ms of kernel time. The five matmul stages went from 8.63 ms to 1.85 ms.
+- Layernorm is now the largest stage (44% of the step) and the next target.
+- Throughput is still flat when users are added, because the server handles one request at a time.
+
 ## Run
 
 ```sh
@@ -86,6 +106,7 @@ make weights                  # export GPT-2 weights (needs models/gpt2)
 make gpt2-gpu-test test-gpu   # correctness first
 make bench-gpu                # tokens/s and time per stage (add BENCH_ARGS="--kv-cache" for the cache)
 make profile-nsys             # timeline: build/report.nsys-rep
+make profile-nsys-decode      # timeline of cached decode steps: build/report_decode.nsys-rep
 make profile-ncu KERNEL=mult_kernel   # one kernel in detail
 make serve-gpu                # local server, then: uv run scripts/chat.py
 ```

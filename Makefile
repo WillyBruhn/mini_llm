@@ -106,6 +106,11 @@ KERNEL ?= multi_head_attention_kernel
 profile-nsys: $(BUILD)/bench
 	CUDA_VISIBLE_DEVICES=$(GPU) nsys profile $(NSYS_FLAGS) --stats=true -o $(BUILD)/report ./$< $(PROFILE_ARGS)
 
+# Timeline of the cached decode steps only (after the prefill). Writes build/report_decode.nsys-rep.
+PROFILE_DECODE_ARGS ?= --backend gpu --prompt-tokens 128 --decode-tokens 41 --warmup 1 --runs 1 --no-check --kv-cache --profile-decode
+profile-nsys-decode: $(BUILD)/bench
+	CUDA_VISIBLE_DEVICES=$(GPU) nsys profile $(NSYS_FLAGS) --stats=true -o $(BUILD)/report_decode ./$< $(PROFILE_DECODE_ARGS)
+
 # Deep look at ONE kernel (the first launch that matches KERNEL).
 # Example: make profile-ncu KERNEL=mult_kernel
 profile-ncu: $(BUILD)/bench
@@ -204,4 +209,4 @@ $(BUILD):
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: gpu-lib serve serve-gpu all test gpt2-test sanitize-cpu test-gpu gpt2-gpu-test sanitize-gpu bench-gpu bench-cpu profile-nsys profile-ncu pytorch-test inference-lib reference weights run clean check format ruff-format-check ruff-check mypy clang-format-check file-length semgrep semgrep-test
+.PHONY: gpu-lib serve serve-gpu all test gpt2-test sanitize-cpu test-gpu gpt2-gpu-test sanitize-gpu bench-gpu bench-cpu profile-nsys profile-nsys-decode profile-ncu pytorch-test inference-lib reference weights run clean check format ruff-format-check ruff-check mypy clang-format-check file-length semgrep semgrep-test

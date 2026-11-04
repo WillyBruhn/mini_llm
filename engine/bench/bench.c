@@ -41,6 +41,7 @@ typedef struct {
     int check;
     int profile;
     int kv_cache;
+    int profile_decode;
 } Options;
 
 typedef struct {
@@ -102,7 +103,7 @@ static void make_prompt(int *tokens, size_t count) {
 }
 
 static int parse_options(int argc, char **argv, Options *options) {
-    Options defaults = {"gpu", DEFAULT_WEIGHTS, NULL, 32, 16, 2, 5, 1, 0, 0};
+    Options defaults = {"gpu", DEFAULT_WEIGHTS, NULL, 32, 16, 2, 5, 1, 0, 0, 0};
     *options = defaults;
     for (int index = 1; index < argc; index++) {
         const char *name = argv[index];
@@ -111,6 +112,8 @@ static int parse_options(int argc, char **argv, Options *options) {
             options->check = 0;
         } else if (strcmp(name, "--profile") == 0) {
             options->profile = 1;
+        } else if (strcmp(name, "--profile-decode") == 0) {
+            options->profile_decode = 1; // capture the decode steps, not the prefill
         } else if (strcmp(name, "--kv-cache") == 0) {
             options->kv_cache = 1;
         } else if (!has_value) {
@@ -180,7 +183,7 @@ static Stats measure_prefill(const Backend *backend, const Options *options, con
         run_forward(backend, prompt, options->prompt_tokens, logits, NULL);
     }
     // With --profile only the timed runs are captured by nsys and ncu.
-    int capture = options->profile && backend->gpu_model != NULL;
+    int capture = options->profile && !options->profile_decode && backend->gpu_model != NULL;
     if (capture) {
         gpu_profiler_start();
     }
@@ -211,7 +214,13 @@ static double measure_decode(const Backend *backend,
     size_t length = options->prompt_tokens;
     double total = 0.0;
     GPT2GpuKvCache *cache = options->kv_cache ? gpt2_gpu_kv_cache_create() : NULL;
+    // Step 0 reads the prompt. The capture starts after it. With --kv-cache the steps are
+    // single-token decodes, without it each step runs the whole sequence again.
+    int capture = options->profile_decode && options->decode_tokens > 1;
     for (size_t step = 0; step < options->decode_tokens; step++) {
+        if (capture && step == 1) {
+            gpu_profiler_start();
+        }
         double start = now_ms();
         if (cache == NULL) {
             run_forward(backend, sequence, length, logits, NULL);
@@ -226,6 +235,9 @@ static double measure_decode(const Backend *backend,
         *first_step_ms = step == 0 ? elapsed : *first_step_ms;
         *last_step_ms = elapsed;
         total += elapsed;
+    }
+    if (capture) {
+        gpu_profiler_stop();
     }
     gpt2_gpu_kv_cache_free(cache);
     free(sequence);
