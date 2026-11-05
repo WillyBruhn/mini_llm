@@ -18,16 +18,17 @@ GPT-2 Small, fp32, RTX 3060, 32-token prompt, greedy decoding, 16 decode tokens.
 | + attention kernel: online softmax, one pass over the keys | 43.3 ms | 17.0 tok/s | [001](docs/001_baseline.md) |
 | + matmul kernel: coalesced memory access | 22.5 ms | 35.5 tok/s | [002](docs/002_mult_kernel.md) |
 | + KV cache and a parallel decode attention kernel | 22.2 ms (unchanged) | 86.7 tok/s | [003](docs/003_kv_cache.md) |
-| + matrix-vector kernel for single-row products (decode) | 21.9 ms (unchanged) | **204.8 tok/s** | [004](docs/004_gemv.md) |
+| + matrix-vector kernel for single-row products (decode) | 21.9 ms | 204.8 tok/s | [004](docs/004_gemv.md) |
+| + layernorm: one block per row | **16.3 ms** | **323.1 tok/s** | [005](docs/005_layernorm.md) |
 
 - Since the first GPU version: prefill is **7.7x** faster and decode is **10x** faster.
 - Attention kernel: 16.9 ms → 0.81 ms (**21x**), found with Nsight Compute (one loop did the same dot product 64 times).
 - Matmul kernel: 1.14 ms → 0.29 ms (**3.9x**) from a two-line change of the thread mapping. 71% of the memory sectors were wasted.
 - Each prediction was written before the change. The results are in the reports.
 
-Where the time goes now (one forward pass without the cache, 22 ms): attention 29%, layernorm 20%, matmul 50%.
+Where the time goes now (one forward pass of 32 tokens, 16.4 ms of kernels): attention 38%, matmul 54%, layernorm 1%.
 
-The decode column of the last row is for 16 tokens. Without a KV cache the decode speed falls as the output gets longer (34.7 tok/s for 16 tokens, 2.7 tok/s for 900). With the cache it stays flat: 88 to 93 tok/s with the matrix-matrix kernel, 222 to 247 tok/s with the matrix-vector kernel.
+The decode column of the last row is for 16 tokens. Without a KV cache the decode speed falls as the output gets longer (34.7 tok/s for 16 tokens, 2.7 tok/s for 900). With the cache it stays flat: 88 to 93 tok/s with the matrix-matrix kernel, 222 to 247 tok/s with the matrix-vector kernel, 351 to 417 tok/s with the faster layernorm.
 
 ## Serving
 
@@ -98,6 +99,26 @@ The decode step multiplies one row by a weight matrix. The old matmul kernel lef
 - One decode step: 10.67 ms → 3.88 ms of kernel time. The five matmul stages went from 8.63 ms to 1.85 ms.
 - Layernorm is now the largest stage (44% of the step) and the next target.
 - Throughput is still flat when users are added, because the server handles one request at a time.
+
+### With the layernorm kernel ([report 005](docs/005_layernorm.md))
+
+After report 004, layernorm was 44% of a decode step. The kernel used one thread per row, so a decode step (one row) ran on one thread of one SM: 68 µs for 12 KB of data. A kernel with one block per row, where the 256 threads split the 768 values and add them with warp shuffles, takes 2.8 µs per call. Same workload, matrix-vector kernel in both columns:
+
+128 new tokens per request:
+
+| Users | tok/s before | tok/s after | Speedup | Inter-token p50 before | after | End-to-end p50 before | after |
+|---|---|---|---|---|---|---|---|
+| 1 | 218.7 | 345.4 | 1.58x | 4.4 ms | 2.8 ms | 0.58 s | 0.36 s |
+| 5 | 235.3 | 373.2 | 1.59x | 20.8 ms | 12.9 ms | 2.71 s | 1.71 s |
+| 10 | 236.1 | 369.8 | 1.57x | 41.4 ms | 26.2 ms | 5.42 s | 3.48 s |
+| 20 | 236.0 | 370.0 | 1.57x | 83.0 ms | 52.6 ms | 10.80 s | 6.90 s |
+
+![Layernorm kernel, 128 tokens](docs/images/005_layernorm_128.png)
+
+- One decode step: 3.87 ms → 2.29 ms of kernel time. Layernorm: 1.709 ms → 0.070 ms.
+- Prefill (32 tokens) also gains: 21.8 ms → 16.3 ms. Layernorm was 20% of that pass.
+- Since the KV cache (report 003), server throughput at 20 users went 90.9 → 237 → 370 tok/s.
+- The server now needs about 0.4 ms per token outside the GPU kernels (15% of a token). Batching the decode of several requests is the next step for throughput.
 
 ## Run
 

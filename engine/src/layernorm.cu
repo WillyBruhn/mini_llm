@@ -6,39 +6,75 @@
 
 #include <math.h>
 
+// One block per row. The threads of the block split the values of the row, so decoding (one
+// row) uses 256 threads instead of one.
+enum { LAYERNORM_THREADS = 256, WARP_SIZE = 32 };
+
+// Sum of one value per thread, for the whole block. Every thread gets the total.
+// Within a warp the values are added with shuffles. The warp sums go through shared memory.
+// Every thread of the block must call this.
+__device__ float block_sum(float value, float *shared) {
+    for (int offset = WARP_SIZE / 2; offset > 0; offset /= 2) {
+        value += __shfl_down_sync(0xffffffffu, value, offset);
+    }
+    unsigned lane = threadIdx.x % WARP_SIZE;
+    unsigned warp = threadIdx.x / WARP_SIZE;
+    if (lane == 0) {
+        shared[warp] = value;
+    }
+    __syncthreads();
+
+    float total = threadIdx.x < LAYERNORM_THREADS / WARP_SIZE ? shared[threadIdx.x] : 0.0f;
+    if (warp == 0) {
+        for (int offset = WARP_SIZE / 2; offset > 0; offset /= 2) {
+            total += __shfl_down_sync(0xffffffffu, total, offset);
+        }
+        if (lane == 0) {
+            shared[WARP_SIZE] = total;
+        }
+    }
+    __syncthreads();
+    float result = shared[WARP_SIZE];
+    __syncthreads(); // not needed by the current callers, keeps block_sum safe to call again
+    return result;
+}
+
+// Same three steps as the CPU version (mean, variance of the centred values, output).
+// The variance uses (x - mean)^2, not E[x^2] - mean^2, which loses digits for a large mean.
 __global__ void layernorm_kernel(float *out,
                                  const float *input,
                                  const float *gamma,
                                  const float *beta,
-                                 size_t n_tokens,
                                  size_t n_embd,
                                  float epsilon) {
-    size_t token_index = blockIdx.x * blockDim.x + threadIdx.x;
-    if (token_index >= n_tokens) {
-        return;
+    __shared__ float shared[WARP_SIZE + 1];
+    const float *row = input + blockIdx.x * n_embd;
+    float *out_row = out + blockIdx.x * n_embd;
+
+    float sum = 0.0f;
+    for (size_t dim = threadIdx.x; dim < n_embd; dim += LAYERNORM_THREADS) {
+        sum += row[dim];
     }
+    float mean = block_sum(sum, shared) / (float)n_embd;
 
-    const float *row = input + token_index * n_embd;
-    float *out_row = out + token_index * n_embd;
-    float mean = 0.0f;
-    float variance = 0.0f;
-
-    for (size_t dim = 0; dim < n_embd; dim++) {
-        mean += row[dim];
-    }
-    mean /= (float)n_embd;
-
-    for (size_t dim = 0; dim < n_embd; dim++) {
+    float squares = 0.0f;
+    for (size_t dim = threadIdx.x; dim < n_embd; dim += LAYERNORM_THREADS) {
         float difference = row[dim] - mean;
-        variance += difference * difference;
+        squares += difference * difference;
     }
-    variance /= (float)n_embd;
+    float variance = block_sum(squares, shared) / (float)n_embd;
 
     float inverse_stddev = 1.0f / sqrtf(variance + epsilon);
-    for (size_t dim = 0; dim < n_embd; dim++) {
+    for (size_t dim = threadIdx.x; dim < n_embd; dim += LAYERNORM_THREADS) {
         float normalized = (row[dim] - mean) * inverse_stddev;
         out_row[dim] = normalized * gamma[dim] + beta[dim];
     }
+}
+
+static LayernormLaunch last_launch = {0, 0};
+
+LayernormLaunch layernorm_last_launch(void) {
+    return last_launch;
 }
 
 void layernorm_device(float *d_out,
@@ -48,10 +84,10 @@ void layernorm_device(float *d_out,
                       size_t n_tokens,
                       size_t n_embd,
                       float epsilon) {
-    int threads_per_block = 256;
-    int blocks = (int)ceil_div(n_tokens, threads_per_block);
-    layernorm_kernel<<<blocks, threads_per_block>>>(d_out, d_input, d_gamma, d_beta, n_tokens,
-                                                    n_embd, epsilon);
+    last_launch.blocks = (unsigned)n_tokens;
+    last_launch.threads_per_block = LAYERNORM_THREADS;
+    layernorm_kernel<<<(unsigned)n_tokens, LAYERNORM_THREADS>>>(d_out, d_input, d_gamma, d_beta,
+                                                                n_embd, epsilon);
     CUDA_CHECK_LAUNCH();
 }
 

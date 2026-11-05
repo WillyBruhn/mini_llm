@@ -31,6 +31,15 @@ void layernorm_device(float *d_out,
                       size_t n_embd,
                       float epsilon);
 
+// Launch shape of the most recent layernorm_device call. Lets tests check the parallelism.
+// A row should get a block of its own, so that the threads of the block split its values.
+typedef struct {
+    unsigned blocks;
+    unsigned threads_per_block;
+} LayernormLaunch;
+
+LayernormLaunch layernorm_last_launch(void);
+
 #ifdef __cplusplus
 }
 #endif
