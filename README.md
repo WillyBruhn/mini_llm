@@ -1,15 +1,16 @@
 # mini_llm
 
 Having fun with implementing a llm from scratch.
-Implemented in C with pytorch bindings.
-Now I try to optimze ttft on a single request.
-Later I might add sth like vllm and try to optimize throughput.
+Implemented in C and CUDA with pytorch bindings.
+First I optimized a single request (kernels, then a KV cache). Now it is served by a FastAPI server with a load test, and the goal is to build the pieces of an engine like vllm and learn how they work.
+
+Status: GPT-2 small on one RTX 3060 generates **~450 tokens/s** (was 3.4 tok/s in the first GPU version). The server handles one request at a time. A **scheduler with batched decode** is the next step, then a paged KV cache.
 
 Intermediate Goal: Learn to use nsys and ncu proerly and learn which optimizations work.
 
 ## So far ...
 
-GPT-2 Small, fp32, RTX 3060, 32-token prompt, greedy decoding, 16 decode tokens. No KV cache until the last row.
+GPT-2 Small, RTX 3060, 32-token prompt, greedy decoding, 16 decode tokens, one sequence (`make bench-gpu`). Up to report 002 there is no KV cache (every decode step runs the whole sequence again), the KV cache starts with report 003, and fp16 weights in decode are opt-in (report 006).
 
 | Step | Prefill (32 tokens) | Decode | Report |
 |---|---|---|---|
@@ -22,18 +23,33 @@ GPT-2 Small, fp32, RTX 3060, 32-token prompt, greedy decoding, 16 decode tokens.
 | + layernorm: one block per row | 16.3 ms | 323.1 tok/s | [005](docs/005_layernorm.md) |
 | + fp16 weights in the decode matrix products (opt-in) | 16.3 ms (unchanged) | **422.2 tok/s** | [006](docs/006_fp16_weights.md) |
 
-- Since the first GPU version: prefill is **7.7x** faster and decode is **10x** faster.
+- Since the first GPU version: prefill (32 tokens) is **10.7x** faster (174 → 16.3 ms) and decode is **95x** faster in fp32 (3.4 → 323 tok/s) and **124x** with fp16 weights (422 tok/s). Most of the decode gain is the KV cache (every step used to run the whole sequence again) and the matrix-vector kernel.
 - Attention kernel: 16.9 ms → 0.81 ms (**21x**), found with Nsight Compute (one loop did the same dot product 64 times).
 - Matmul kernel: 1.14 ms → 0.29 ms (**3.9x**) from a two-line change of the thread mapping. 71% of the memory sectors were wasted.
 - Each prediction was written before the change. The results are in the reports.
 
-Where the time goes now (one forward pass of 32 tokens, 16.4 ms of kernels): attention 38%, matmul 54%, layernorm 1%.
+Where the time goes now:
 
-The decode column of the last row is for 16 tokens. Without a KV cache the decode speed falls as the output gets longer (34.7 tok/s for 16 tokens, 2.7 tok/s for 900). With the cache it stays flat: 88 to 93 tok/s with the matrix-matrix kernel, 222 to 247 tok/s with the matrix-vector kernel, 351 to 417 tok/s with the faster layernorm, 480 to 614 tok/s with fp16 weights.
+- **Prefill** (one pass over 32 tokens, 16.4 ms of kernels): attention 38%, matmuls 54%, layernorm 1%. The old attention kernel is the next prefill target.
+- **Decode** (one token, fp16 weights, 1.57 ms of kernels): the matrix products 1.18 ms (75%: q/k/v 23%, output head 16%, MLP 30%, attention projection 6%), attention 17%, layernorm 4.5%. It is memory-bound: it reads each weight once.
+
+The decode column is for 16 tokens. Without a KV cache the decode speed falls as the output gets longer (34.7 tok/s for 16 tokens, 2.7 tok/s for 900). With the cache it stays flat: 88 to 93 tok/s with the matrix-matrix kernel, 222 to 247 tok/s with the matrix-vector kernel, 351 to 417 tok/s with the faster layernorm, 480 to 614 tok/s with fp16 weights.
 
 ## Serving
 
-Closed-loop load test with `scripts/benchmark_throughput.py`: N concurrent users, each sends requests one after another. Streaming, short prompts, same GPU as above. The server is FastAPI with one engine. Requests are processed one at a time, there is no batching yet.
+Closed-loop load test with `scripts/benchmark_throughput.py`: N concurrent users, each sends requests one after another. Streaming, short prompts, same GPU as above. The server is FastAPI with one engine and a KV cache per running session (`--no-kv-cache` gives the old behaviour). Requests are processed one at a time, there is no batching yet.
+
+At a glance, 20 concurrent users, 128 new tokens per request. Each row is one report; the runs were made on different days, so small differences between rows are not only the change:
+
+| Step | Output tok/s | Inter-token p50 | End-to-end p50 | Report |
+|---|---|---|---|---|
+| No KV cache (baseline) | 19.3 | 1019 ms | 132.4 s | [003](docs/003_kv_cache.md) |
+| + KV cache | 90.9 | 220 ms | 28.1 s | [003](docs/003_kv_cache.md) |
+| + matrix-vector kernel | 237.2 | 82.6 ms | 10.8 s | [004](docs/004_gemv.md) |
+| + layernorm, one block per row | 370.0 | 52.6 ms | 6.9 s | [005](docs/005_layernorm.md) |
+| + fp16 weights in decode (opt-in) | **445.4** | **43.7 ms** | **5.7 s** | [006](docs/006_fp16_weights.md) |
+
+Throughput is flat from 1 to 20 users in every row, because the requests wait for each other. The latency grows with the number of users instead. This is what batching has to change.
 
 ### Baseline: no KV cache (`--no-kv-cache`)
 
