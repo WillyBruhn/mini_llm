@@ -28,6 +28,24 @@ typedef struct {
     const float *mlp_down_bias;
 } TransformerBlockWeights;
 
+// The six weight matrices of a block that a decode step multiplies with, rounded to fp16.
+// Each holds [rows, columns] 16-bit values, in the same layout as the fp32 matrix.
+typedef struct {
+    const unsigned short *query_weights;
+    const unsigned short *key_weights;
+    const unsigned short *value_weights;
+    const unsigned short *attention_weights;
+    const unsigned short *mlp_up_weights;
+    const unsigned short *mlp_down_weights;
+} TransformerBlockHalfWeights;
+
+// Converts the GPU weights of a block to fp16 (new GPU buffers). Returns the bytes allocated.
+size_t transformer_block_half_weights_create(const TransformerBlockWeights *d_weights,
+                                             TransformerBlockHalfWeights *half,
+                                             size_t hidden_size,
+                                             size_t mlp_size);
+void transformer_block_half_weights_free(const TransformerBlockHalfWeights *half);
+
 void transformer_block_forward(const float *input,
                                float *out,
                                const TransformerBlockWeights *weights,
@@ -83,10 +101,12 @@ void transformer_block_device(const float *d_input,
 // d_input and d_out are single rows [hidden_size] and must be different buffers.
 // The token's K and V are written to row `position` of cache_k and cache_v
 // (each [positions, hidden_size]); then it attends to rows 0..position.
-// The scratch buffers need at least one row.
+// The scratch buffers need at least one row. half_weights may be NULL: then the fp32 weights
+// are used. Otherwise the six matrix products read the fp16 copy (biases stay fp32).
 void transformer_block_decode_device(const float *d_input,
                                      float *d_out,
                                      const TransformerBlockWeights *d_weights,
+                                     const TransformerBlockHalfWeights *half_weights,
                                      const TransformerBlockScratch *scratch,
                                      float *cache_k,
                                      float *cache_v,

@@ -4,6 +4,7 @@ import ctypes
 import os
 import threading
 from contextlib import AbstractContextManager, nullcontext
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
@@ -22,6 +23,16 @@ _LIBRARY_FILES: dict[Backend, str] = {
     "gpu": "libmini_llm_gpu.so",
 }
 _MAKE_TARGETS: dict[Backend, str] = {"cpu": "inference-lib", "gpu": "gpu-lib"}
+
+
+@dataclass(frozen=True)
+class EngineOptions:
+    """How the engine generates. The defaults are the fast, safe choice."""
+
+    use_kv_cache: bool = True
+    max_sessions: int = 32
+    # Decode with fp16 weights. See NativeGPT2.
+    fp16_decode: bool = False
 
 
 class RecomputeSession:
@@ -104,9 +115,13 @@ class NativeGPT2:
     A GPU model has one set of buffers, so calls are serialized with a lock.
     A failed CUDA call stops the whole process (see engine/include/cuda_check.h).
 
+    Pass an EngineOptions to choose the KV cache, the number of sessions and fp16 decoding.
     Use open_session() to generate. On the GPU a session owns a KV cache (about 72 MB of
     GPU memory). At most max_sessions sessions are open at once; more callers wait.
     With use_kv_cache=False, or on the CPU, a session recomputes the whole sequence.
+    With fp16_decode=True the decode steps read the weights as fp16 (+247 MB of GPU memory,
+    about 1.4x faster decoding). The prompt is still read with the fp32 weights. It needs the
+    KV cache and the GPU, and it changes the logits slightly (see docs/006_fp16_weights.md).
     """
 
     def __init__(
@@ -114,12 +129,14 @@ class NativeGPT2:
         weights_directory: str | Path,
         library_path: str | Path | None = None,
         backend: Backend = "cpu",
-        use_kv_cache: bool = True,
-        max_sessions: int = 32,
+        options: EngineOptions = EngineOptions(),
     ) -> None:
+        if options.fp16_decode and not (options.use_kv_cache and backend == "gpu"):
+            raise ValueError("fp16_decode needs backend='gpu' and use_kv_cache=True")
         self.backend: Backend = backend
-        self.use_kv_cache = use_kv_cache and backend == "gpu"
-        self._cache_slots = threading.BoundedSemaphore(max_sessions)
+        self.use_kv_cache = options.use_kv_cache and backend == "gpu"
+        self.fp16_decode = options.fp16_decode
+        self._cache_slots = threading.BoundedSemaphore(options.max_sessions)
         self._cache_lock = threading.Lock()
         self._free_caches: list[int] = []
         self._all_caches: list[int] = []
@@ -151,6 +168,10 @@ class NativeGPT2:
             self.library.gpt2_model_free(cpu_model)
             if not self.model:
                 raise RuntimeError("Failed to copy the GPT-2 weights to the GPU")
+            if self.fp16_decode and not self.library.gpt2_gpu_model_enable_fp16_decode(
+                self.model
+            ):
+                raise RuntimeError("Failed to convert the weights to fp16")
         else:
             self.model = cpu_model
 
@@ -182,6 +203,8 @@ class NativeGPT2:
                 ctypes.c_void_p,
             ]
             library.gpt2_gpu_forward_last.restype = ctypes.c_int
+            library.gpt2_gpu_model_enable_fp16_decode.argtypes = [ctypes.c_void_p]
+            library.gpt2_gpu_model_enable_fp16_decode.restype = ctypes.c_int
             library.gpt2_gpu_kv_cache_create.argtypes = []
             library.gpt2_gpu_kv_cache_create.restype = ctypes.c_void_p
             library.gpt2_gpu_kv_cache_free.argtypes = [ctypes.c_void_p]

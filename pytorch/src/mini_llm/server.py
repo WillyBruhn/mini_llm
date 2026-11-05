@@ -17,7 +17,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from transformers import AutoTokenizer
 
-from mini_llm.native import NativeGPT2
+from mini_llm.native import EngineOptions, NativeGPT2
 from mini_llm.schemas import (
     DoneEvent,
     ErrorResponse,
@@ -270,6 +270,12 @@ def parse_args() -> argparse.Namespace:
         help="Recompute the whole sequence at every step (the slow baseline)",
     )
     parser.add_argument(
+        "--fp16-weights",
+        action="store_true",
+        help="Decode with fp16 weights: about 1.4x faster, +247 MB of GPU memory, "
+        "slightly different logits. The prompt still uses fp32",
+    )
+    parser.add_argument(
         "--max-sessions",
         type=int,
         default=32,
@@ -289,14 +295,20 @@ def main() -> None:
     tokenizer = AutoTokenizer.from_pretrained(  # type: ignore[no-untyped-call]
         args.model, local_files_only=True, use_fast=True
     )
+    if args.fp16_weights and (args.no_kv_cache or args.backend != "gpu"):
+        raise SystemExit("--fp16-weights needs --backend gpu and the KV cache")
     engine = NativeGPT2(
         args.weights,
         args.library,
         args.backend,
-        use_kv_cache=not args.no_kv_cache,
-        max_sessions=args.max_sessions,
+        EngineOptions(
+            use_kv_cache=not args.no_kv_cache,
+            max_sessions=args.max_sessions,
+            fp16_decode=args.fp16_weights,
+        ),
     )
     suffix = "-kvcache" if engine.use_kv_cache else ""
+    suffix += "-fp16" if engine.fp16_decode else ""
     service = InferenceService(
         engine, tokenizer, f"gpt2-small-native-{args.backend}{suffix}"
     )

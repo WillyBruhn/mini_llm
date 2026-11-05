@@ -5,6 +5,7 @@
 #include "../include/gelu.h"
 #include "../include/layernorm.h"
 #include "../include/linear.h"
+#include "../include/matrix_mult.h"
 #include "../include/vector_addition.h"
 
 #include <cuda_runtime.h>
@@ -66,6 +67,39 @@ void transformer_block_weights_free_device(const TransformerBlockWeights *device
     device_free(device->mlp_up_bias);
     device_free(device->mlp_down_weights);
     device_free(device->mlp_down_bias);
+}
+
+static const unsigned short *to_half(const float *d_weights, size_t count) {
+    unsigned short *d_half = NULL;
+    CUDA_CHECK(cudaMalloc((void **)&d_half, count * sizeof(unsigned short)));
+    convert_f32_to_f16_device(d_weights, d_half, count);
+    return d_half;
+}
+
+size_t transformer_block_half_weights_create(const TransformerBlockWeights *d_weights,
+                                             TransformerBlockHalfWeights *half,
+                                             size_t hidden_size,
+                                             size_t mlp_size) {
+    size_t square = hidden_size * hidden_size;
+    size_t mlp = hidden_size * mlp_size;
+
+    half->query_weights = to_half(d_weights->query_weights, square);
+    half->key_weights = to_half(d_weights->key_weights, square);
+    half->value_weights = to_half(d_weights->value_weights, square);
+    half->attention_weights = to_half(d_weights->attention_weights, square);
+    half->mlp_up_weights = to_half(d_weights->mlp_up_weights, mlp);
+    half->mlp_down_weights = to_half(d_weights->mlp_down_weights, mlp);
+    CUDA_CHECK(cudaDeviceSynchronize());
+    return (4 * square + 2 * mlp) * sizeof(unsigned short);
+}
+
+void transformer_block_half_weights_free(const TransformerBlockHalfWeights *half) {
+    CUDA_CHECK(cudaFree((void *)half->query_weights));
+    CUDA_CHECK(cudaFree((void *)half->key_weights));
+    CUDA_CHECK(cudaFree((void *)half->value_weights));
+    CUDA_CHECK(cudaFree((void *)half->attention_weights));
+    CUDA_CHECK(cudaFree((void *)half->mlp_up_weights));
+    CUDA_CHECK(cudaFree((void *)half->mlp_down_weights));
 }
 
 void transformer_block_scratch_allocate(TransformerBlockScratch *scratch,
@@ -175,6 +209,7 @@ void transformer_block_device(const float *d_input,
 void transformer_block_decode_device(const float *d_input,
                                      float *d_out,
                                      const TransformerBlockWeights *w,
+                                     const TransformerBlockHalfWeights *half,
                                      const TransformerBlockScratch *s,
                                      float *cache_k,
                                      float *cache_v,
@@ -194,9 +229,17 @@ void transformer_block_decode_device(const float *d_input,
 
     // K and V go straight into their cache row. Q is only needed for this token.
     gpu_timer_begin(timer, GPU_STAGE_QKV, layer);
-    linear_device(s->ln1, w->query_weights, w->query_bias, s->q, 1, hidden_size, hidden_size);
-    linear_device(s->ln1, w->key_weights, w->key_bias, row_k, 1, hidden_size, hidden_size);
-    linear_device(s->ln1, w->value_weights, w->value_bias, row_v, 1, hidden_size, hidden_size);
+    if (half != NULL) {
+        linear_half_device(s->ln1, half->query_weights, w->query_bias, s->q, hidden_size,
+                           hidden_size);
+        linear_half_device(s->ln1, half->key_weights, w->key_bias, row_k, hidden_size, hidden_size);
+        linear_half_device(s->ln1, half->value_weights, w->value_bias, row_v, hidden_size,
+                           hidden_size);
+    } else {
+        linear_device(s->ln1, w->query_weights, w->query_bias, s->q, 1, hidden_size, hidden_size);
+        linear_device(s->ln1, w->key_weights, w->key_bias, row_k, 1, hidden_size, hidden_size);
+        linear_device(s->ln1, w->value_weights, w->value_bias, row_v, 1, hidden_size, hidden_size);
+    }
     gpu_timer_end(timer);
 
     gpu_timer_begin(timer, GPU_STAGE_ATTENTION, layer);
@@ -205,8 +248,13 @@ void transformer_block_decode_device(const float *d_input,
     gpu_timer_end(timer);
 
     gpu_timer_begin(timer, GPU_STAGE_ATTN_PROJ, layer);
-    linear_device(s->attention, w->attention_weights, w->attention_bias, s->projected, 1,
-                  hidden_size, hidden_size);
+    if (half != NULL) {
+        linear_half_device(s->attention, half->attention_weights, w->attention_bias, s->projected,
+                           hidden_size, hidden_size);
+    } else {
+        linear_device(s->attention, w->attention_weights, w->attention_bias, s->projected, 1,
+                      hidden_size, hidden_size);
+    }
     gpu_timer_end(timer);
 
     gpu_timer_begin(timer, GPU_STAGE_RESIDUAL_ADD, layer);
@@ -218,7 +266,13 @@ void transformer_block_decode_device(const float *d_input,
     gpu_timer_end(timer);
 
     gpu_timer_begin(timer, GPU_STAGE_MLP_UP, layer);
-    linear_device(s->ln2, w->mlp_up_weights, w->mlp_up_bias, s->mlp_up, 1, hidden_size, mlp_size);
+    if (half != NULL) {
+        linear_half_device(s->ln2, half->mlp_up_weights, w->mlp_up_bias, s->mlp_up, hidden_size,
+                           mlp_size);
+    } else {
+        linear_device(s->ln2, w->mlp_up_weights, w->mlp_up_bias, s->mlp_up, 1, hidden_size,
+                      mlp_size);
+    }
     gpu_timer_end(timer);
 
     gpu_timer_begin(timer, GPU_STAGE_GELU, layer);
@@ -226,8 +280,13 @@ void transformer_block_decode_device(const float *d_input,
     gpu_timer_end(timer);
 
     gpu_timer_begin(timer, GPU_STAGE_MLP_DOWN, layer);
-    linear_device(s->mlp_activated, w->mlp_down_weights, w->mlp_down_bias, d_out, 1, mlp_size,
-                  hidden_size);
+    if (half != NULL) {
+        linear_half_device(s->mlp_activated, half->mlp_down_weights, w->mlp_down_bias, d_out,
+                           mlp_size, hidden_size);
+    } else {
+        linear_device(s->mlp_activated, w->mlp_down_weights, w->mlp_down_bias, d_out, 1, mlp_size,
+                      hidden_size);
+    }
     gpu_timer_end(timer);
 
     gpu_timer_begin(timer, GPU_STAGE_RESIDUAL_ADD, layer);

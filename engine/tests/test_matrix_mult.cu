@@ -1,6 +1,7 @@
 #include "../include/matrix_mult.h"
-#include "test_util.h"
+#include "test_gpu_helpers.h"
 
+#include <cuda_fp16.h>
 #include <cuda_runtime.h>
 
 #include <math.h>
@@ -40,24 +41,6 @@ TEST(matrix_mult_gpu_matches_cpu_for_deterministic_100_by_100_matrices) {
     matrixmult_gpu(a, b, out_gpu, dimension, dimension, dimension);
 
     assert_tensor_near(out_gpu, out, element_count, 1e-4f);
-}
-
-static float *random_floats(size_t count, unsigned seed) {
-    float *values = (float *)malloc(count * sizeof(float));
-    ASSERT_TRUE(values != NULL);
-    srand(seed);
-    for (size_t index = 0; index < count; index++) {
-        values[index] = (float)rand() / (float)RAND_MAX * 2.0f - 1.0f;
-    }
-    return values;
-}
-
-static float *to_device(const float *host, size_t count) {
-    float *device = NULL;
-    ASSERT_TRUE(cudaMalloc((void **)&device, count * sizeof(float)) == cudaSuccess);
-    ASSERT_TRUE(cudaMemcpy(device, host, count * sizeof(float), cudaMemcpyHostToDevice) ==
-                cudaSuccess);
-    return device;
 }
 
 // Runs matvec_device on the GPU. The output starts as garbage: the kernel must overwrite it.

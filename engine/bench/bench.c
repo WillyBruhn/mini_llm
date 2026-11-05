@@ -12,6 +12,7 @@
 
 #include "../include/gpt2.h"
 #include "../include/gpt2_gpu.h"
+#include "bench_options.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -26,23 +27,8 @@
 #define BUILD_FLAGS "unknown"
 #endif
 
-#define DEFAULT_WEIGHTS "engine/tests/reference_data/weights"
 #define CHECK_TOKENS 8
 #define CHECK_TOLERANCE 1e-3f
-
-typedef struct {
-    const char *backend;
-    const char *weights;
-    const char *json_path;
-    size_t prompt_tokens;
-    size_t decode_tokens;
-    int warmup;
-    int runs;
-    int check;
-    int profile;
-    int kv_cache;
-    int profile_decode;
-} Options;
 
 typedef struct {
     double median_ms;
@@ -100,56 +86,6 @@ static void make_prompt(int *tokens, size_t count) {
     for (size_t index = 0; index < count; index++) {
         tokens[index] = (int)((index * 7919u + 1013u) % GPT2_N_VOCAB);
     }
-}
-
-static int parse_options(int argc, char **argv, Options *options) {
-    Options defaults = {"gpu", DEFAULT_WEIGHTS, NULL, 32, 16, 2, 5, 1, 0, 0, 0};
-    *options = defaults;
-    for (int index = 1; index < argc; index++) {
-        const char *name = argv[index];
-        int has_value = index + 1 < argc;
-        if (strcmp(name, "--no-check") == 0) {
-            options->check = 0;
-        } else if (strcmp(name, "--profile") == 0) {
-            options->profile = 1;
-        } else if (strcmp(name, "--profile-decode") == 0) {
-            options->profile_decode = 1; // capture the decode steps, not the prefill
-        } else if (strcmp(name, "--kv-cache") == 0) {
-            options->kv_cache = 1;
-        } else if (!has_value) {
-            fprintf(stderr, "missing value for %s\n", name);
-            return 0;
-        } else if (strcmp(name, "--backend") == 0) {
-            options->backend = argv[++index];
-        } else if (strcmp(name, "--weights") == 0) {
-            options->weights = argv[++index];
-        } else if (strcmp(name, "--json") == 0) {
-            options->json_path = argv[++index];
-        } else if (strcmp(name, "--prompt-tokens") == 0) {
-            options->prompt_tokens = (size_t)atol(argv[++index]);
-        } else if (strcmp(name, "--decode-tokens") == 0) {
-            options->decode_tokens = (size_t)atol(argv[++index]);
-        } else if (strcmp(name, "--warmup") == 0) {
-            options->warmup = atoi(argv[++index]);
-        } else if (strcmp(name, "--runs") == 0) {
-            options->runs = atoi(argv[++index]);
-        } else {
-            fprintf(stderr, "unknown option %s\n", name);
-            return 0;
-        }
-    }
-    if (options->kv_cache && strcmp(options->backend, "gpu") != 0) {
-        fprintf(stderr, "--kv-cache needs --backend gpu\n");
-        return 0;
-    }
-    int backend_ok = strcmp(options->backend, "gpu") == 0 || strcmp(options->backend, "cpu") == 0;
-    if (!backend_ok || options->prompt_tokens < 1 || options->runs < 1 || options->warmup < 0 ||
-        options->prompt_tokens + options->decode_tokens > GPT2_N_POSITIONS) {
-        fprintf(stderr, "invalid options (backend gpu|cpu, runs >= 1, tokens <= %d)\n",
-                GPT2_N_POSITIONS);
-        return 0;
-    }
-    return 1;
 }
 
 // The correctness gate. A fast but wrong result is not a result.
@@ -300,9 +236,10 @@ static void print_context(const Options *options) {
                info.compute_major, info.compute_minor, info.multiprocessors,
                info.memory_bytes / 1e9, info.runtime_version, info.driver_version);
     }
-    printf("workload   prompt=%zu tokens, decode=%zu tokens, warmup=%d, runs=%d, kv cache=%s\n",
+    printf("workload   prompt=%zu tokens, decode=%zu tokens, warmup=%d, runs=%d, kv cache=%s, "
+           "fp16 weights=%s\n",
            options->prompt_tokens, options->decode_tokens, options->warmup, options->runs,
-           options->kv_cache ? "on" : "off");
+           options->kv_cache ? "on" : "off", options->fp16_weights ? "on" : "off");
 }
 
 static void write_json(const Options *options,
@@ -322,7 +259,8 @@ static void write_json(const Options *options,
         fprintf(file, "  \"gpu\": \"%s\",\n  \"compute\": \"sm_%d%d\",\n", info.name,
                 info.compute_major, info.compute_minor);
     }
-    fprintf(file, "  \"kv_cache\": %s,\n", options->kv_cache ? "true" : "false");
+    fprintf(file, "  \"kv_cache\": %s,\n  \"fp16_weights\": %s,\n",
+            options->kv_cache ? "true" : "false", options->fp16_weights ? "true" : "false");
     fprintf(file, "  \"prompt_tokens\": %zu,\n  \"decode_tokens\": %zu,\n  \"runs\": %d,\n",
             options->prompt_tokens, options->decode_tokens, options->runs);
     fprintf(file, "  \"prefill_ms\": {\"median\": %.4f, \"min\": %.4f, \"mean\": %.4f},\n",
@@ -356,6 +294,9 @@ int main(int argc, char **argv) {
     int use_gpu = strcmp(options.backend, "gpu") == 0;
     if (use_gpu) {
         backend.gpu_model = gpt2_gpu_model_create(backend.cpu_model);
+    }
+    if (options.fp16_weights) {
+        gpt2_gpu_model_enable_fp16_decode(backend.gpu_model);
     }
 
     int *prompt = malloc((options.prompt_tokens + options.decode_tokens) * sizeof(int));

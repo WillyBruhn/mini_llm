@@ -19,7 +19,8 @@ GPT-2 Small, fp32, RTX 3060, 32-token prompt, greedy decoding, 16 decode tokens.
 | + matmul kernel: coalesced memory access | 22.5 ms | 35.5 tok/s | [002](docs/002_mult_kernel.md) |
 | + KV cache and a parallel decode attention kernel | 22.2 ms (unchanged) | 86.7 tok/s | [003](docs/003_kv_cache.md) |
 | + matrix-vector kernel for single-row products (decode) | 21.9 ms | 204.8 tok/s | [004](docs/004_gemv.md) |
-| + layernorm: one block per row | **16.3 ms** | **323.1 tok/s** | [005](docs/005_layernorm.md) |
+| + layernorm: one block per row | 16.3 ms | 323.1 tok/s | [005](docs/005_layernorm.md) |
+| + fp16 weights in the decode matrix products (opt-in) | 16.3 ms (unchanged) | **422.2 tok/s** | [006](docs/006_fp16_weights.md) |
 
 - Since the first GPU version: prefill is **7.7x** faster and decode is **10x** faster.
 - Attention kernel: 16.9 ms → 0.81 ms (**21x**), found with Nsight Compute (one loop did the same dot product 64 times).
@@ -28,7 +29,7 @@ GPT-2 Small, fp32, RTX 3060, 32-token prompt, greedy decoding, 16 decode tokens.
 
 Where the time goes now (one forward pass of 32 tokens, 16.4 ms of kernels): attention 38%, matmul 54%, layernorm 1%.
 
-The decode column of the last row is for 16 tokens. Without a KV cache the decode speed falls as the output gets longer (34.7 tok/s for 16 tokens, 2.7 tok/s for 900). With the cache it stays flat: 88 to 93 tok/s with the matrix-matrix kernel, 222 to 247 tok/s with the matrix-vector kernel, 351 to 417 tok/s with the faster layernorm.
+The decode column of the last row is for 16 tokens. Without a KV cache the decode speed falls as the output gets longer (34.7 tok/s for 16 tokens, 2.7 tok/s for 900). With the cache it stays flat: 88 to 93 tok/s with the matrix-matrix kernel, 222 to 247 tok/s with the matrix-vector kernel, 351 to 417 tok/s with the faster layernorm, 480 to 614 tok/s with fp16 weights.
 
 ## Serving
 
@@ -120,6 +121,25 @@ After report 004, layernorm was 44% of a decode step. The kernel used one thread
 - Since the KV cache (report 003), server throughput at 20 users went 90.9 → 237 → 370 tok/s.
 - The server now needs about 0.4 ms per token outside the GPU kernels (15% of a token). Batching the decode of several requests is the next step for throughput.
 
+### With fp16 weights in decode ([report 006](docs/006_fp16_weights.md))
+
+A decode step reads every weight once, so it is limited by memory bandwidth (ncu: 63–86% of the DRAM peak, compute units 70–80% idle). With fp16 weights it reads 247 MB instead of 494 MB. The accumulation, activations, KV cache, layernorm and biases stay fp32, and prefill still uses the fp32 weights. It is opt-in (`make serve-gpu SERVE_ARGS=--fp16-weights`) and costs +247 MB of GPU memory. Same workload, fp32 server in the same session:
+
+128 new tokens per request:
+
+| Users | tok/s fp32 | tok/s fp16 | Speedup | Inter-token p50 fp32 | fp16 | End-to-end p50 fp32 | fp16 |
+|---|---|---|---|---|---|---|---|
+| 1 | 352.6 | 452.7 | 1.28x | 2.7 ms | 2.0 ms | 0.36 s | 0.27 s |
+| 5 | 367.9 | 446.3 | 1.21x | 13.1 ms | 10.8 ms | 1.73 s | 1.40 s |
+| 10 | 370.7 | 448.4 | 1.21x | 26.2 ms | 21.7 ms | 3.43 s | 2.90 s |
+| 20 | 373.3 | 445.4 | 1.19x | 52.4 ms | 43.7 ms | 6.82 s | 5.72 s |
+
+![fp32 against fp16 weights, 128 tokens](docs/images/006_fp16_128.png)
+
+- One decode step: 2.30 ms → 1.57 ms of kernel time (1.46x). The five matrix-vector stages went from 1.90 ms to 1.18 ms (1.61x).
+- The server gains less than the kernels (1.19x–1.28x). The time outside the kernels grew from 0.38 to 0.68 ms per token (30% of a token). I did not find the cause yet.
+- Accuracy over 1200 teacher-forced positions: top-1 agreement 100%, mean KL 5.7e-06 nats, and all 12 prompts give the same 100 greedy tokens. The largest single logit difference is 3.5 (at a top logit of 42), above the 0.1 that I had set as a limit, so that criterion is reported as not met. See the report.
+
 ## Run
 
 ```sh
@@ -129,5 +149,5 @@ make bench-gpu                # tokens/s and time per stage (add BENCH_ARGS="--k
 make profile-nsys             # timeline: build/report.nsys-rep
 make profile-nsys-decode      # timeline of cached decode steps: build/report_decode.nsys-rep
 make profile-ncu KERNEL=mult_kernel   # one kernel in detail
-make serve-gpu                # local server, then: uv run scripts/chat.py
+make serve-gpu                # local server, then: uv run scripts/chat.py (SERVE_ARGS=--fp16-weights for fp16 decode)
 ```

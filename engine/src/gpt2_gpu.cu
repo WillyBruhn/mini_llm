@@ -29,6 +29,12 @@ struct GPT2GpuModel {
     float *next_hidden;
     float *final_norm; // [1, hidden]: only the last token goes through the head
     float *logits;     // [1, vocab]
+
+    // Optional fp16 copy of the matrices that a decode step multiplies with.
+    int fp16_enabled;
+    size_t fp16_bytes;
+    TransformerBlockHalfWeights half_blocks[GPT2_N_LAYER];
+    unsigned short *half_lm_head; // [hidden, vocab]
 };
 
 // K and V of every past token of one sequence, one buffer per layer.
@@ -119,6 +125,12 @@ void gpt2_gpu_model_free(GPT2GpuModel *model) {
     for (size_t layer = 0; layer < GPT2_N_LAYER; layer++) {
         transformer_block_weights_free_device(&model->blocks[layer]);
     }
+    if (model->fp16_enabled) {
+        for (size_t layer = 0; layer < GPT2_N_LAYER; layer++) {
+            transformer_block_half_weights_free(&model->half_blocks[layer]);
+        }
+        CUDA_CHECK(cudaFree(model->half_lm_head));
+    }
     transformer_block_scratch_free(&model->scratch);
     CUDA_CHECK(cudaFree(model->tokens));
     CUDA_CHECK(cudaFree(model->hidden));
@@ -126,6 +138,37 @@ void gpt2_gpu_model_free(GPT2GpuModel *model) {
     CUDA_CHECK(cudaFree(model->final_norm));
     CUDA_CHECK(cudaFree(model->logits));
     free(model);
+}
+
+int gpt2_gpu_model_enable_fp16_decode(GPT2GpuModel *model) {
+    if (model == NULL) {
+        return 0;
+    }
+    if (model->fp16_enabled) {
+        return 1;
+    }
+    size_t bytes = 0;
+    for (size_t layer = 0; layer < GPT2_N_LAYER; layer++) {
+        bytes += transformer_block_half_weights_create(
+            &model->blocks[layer], &model->half_blocks[layer], GPT2_N_EMBD, GPT2_N_INNER);
+    }
+    size_t head_count = (size_t)GPT2_N_EMBD * GPT2_N_VOCAB;
+    unsigned short *head = NULL;
+    CUDA_CHECK(cudaMalloc((void **)&head, head_count * sizeof(unsigned short)));
+    convert_f32_to_f16_device(model->lm_head, head, head_count);
+    CUDA_CHECK(cudaDeviceSynchronize());
+    model->half_lm_head = head;
+    model->fp16_bytes = bytes + head_count * sizeof(unsigned short);
+    model->fp16_enabled = 1;
+    return 1;
+}
+
+int gpt2_gpu_model_uses_fp16_decode(const GPT2GpuModel *model) {
+    return model != NULL && model->fp16_enabled;
+}
+
+size_t gpt2_gpu_model_fp16_bytes(const GPT2GpuModel *model) {
+    return model == NULL ? 0 : model->fp16_bytes;
 }
 
 GPT2GpuKvCache *gpt2_gpu_kv_cache_create(void) {
@@ -295,10 +338,12 @@ int gpt2_gpu_decode(
     gpu_timer_end(timer);
 
     for (size_t layer = 0; layer < GPT2_N_LAYER; layer++) {
+        const TransformerBlockHalfWeights *half =
+            model->fp16_enabled ? &model->half_blocks[layer] : NULL;
         transformer_block_decode_device(model->hidden, model->next_hidden, &model->blocks[layer],
-                                        &model->scratch, cache->k[layer], cache->v[layer], position,
-                                        GPT2_N_EMBD, GPT2_N_HEAD, GPT2_N_INNER, LAYERNORM_EPSILON,
-                                        timer, (int)layer);
+                                        half, &model->scratch, cache->k[layer], cache->v[layer],
+                                        position, GPT2_N_EMBD, GPT2_N_HEAD, GPT2_N_INNER,
+                                        LAYERNORM_EPSILON, timer, (int)layer);
         float *temporary = model->hidden;
         model->hidden = model->next_hidden;
         model->next_hidden = temporary;
@@ -311,8 +356,13 @@ int gpt2_gpu_decode(
     gpu_timer_end(timer);
 
     gpu_timer_begin(timer, GPU_STAGE_LM_HEAD, -1);
-    matrixmult_device(model->final_norm, model->lm_head, model->logits, 1, GPT2_N_EMBD,
-                      GPT2_N_VOCAB);
+    if (model->fp16_enabled) {
+        matvec_half_device(model->final_norm, model->half_lm_head, model->logits, GPT2_N_EMBD,
+                           GPT2_N_VOCAB);
+    } else {
+        matrixmult_device(model->final_norm, model->lm_head, model->logits, 1, GPT2_N_EMBD,
+                          GPT2_N_VOCAB);
+    }
     gpu_timer_end(timer);
 
     CUDA_CHECK(

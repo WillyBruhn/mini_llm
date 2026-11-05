@@ -72,3 +72,17 @@ void linear_device(const float *d_input,
     add_bias_kernel<<<blocks, threads_per_block>>>(d_out, d_bias, input_rows, output_columns);
     CUDA_CHECK_LAUNCH();
 }
+
+void linear_half_device(const float *d_input,
+                        const unsigned short *d_half_weights,
+                        const float *d_bias,
+                        float *d_out,
+                        size_t input_columns,
+                        size_t output_columns) {
+    matvec_half_device(d_input, d_half_weights, d_out, input_columns, output_columns);
+
+    size_t threads_per_block = 256;
+    size_t blocks = ceil_div(output_columns, threads_per_block);
+    add_bias_kernel<<<blocks, threads_per_block>>>(d_out, d_bias, 1, output_columns);
+    CUDA_CHECK_LAUNCH();
+}

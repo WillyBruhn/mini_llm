@@ -3,33 +3,13 @@
 #include "../include/gpt2_gpu.h"
 #include "../include/layernorm.h"
 #include "../include/linear.h"
+#include "../include/matrix_mult.h"
 #include "../include/tensor_loading.h"
-#include "test_util.h"
+#include "test_gpt2_gpu_common.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-#define REFERENCE_DIR "engine/tests/reference_data"
-#define WEIGHTS_DIR REFERENCE_DIR "/weights"
-
-static void assert_reference_close(const float *actual,
-                                   const float *expected,
-                                   size_t count,
-                                   float relative_tolerance,
-                                   float absolute_tolerance) {
-    for (size_t index = 0; index < count; index++) {
-        float difference = fabsf(actual[index] - expected[index]);
-        float tolerance = absolute_tolerance + relative_tolerance * fabsf(expected[index]);
-        if (difference > tolerance) {
-            fprintf(stderr,
-                    "FAIL reference mismatch at index=%zu: actual=%g expected=%g "
-                    "difference=%g tolerance=%g\n",
-                    index, actual[index], expected[index], difference, tolerance);
-            exit(1);
-        }
-    }
-}
 
 TEST(gpu_gpt2_forward_matches_saved_references_and_cpu) {
     int tokens[3];
@@ -93,32 +73,6 @@ TEST(gpu_gpt2_forward_matches_saved_references_and_cpu) {
     free(expected_logits);
     gpt2_gpu_model_free(gpu_model);
     gpt2_model_free(cpu_model);
-}
-
-static const int PREFILL_TOKENS[] = {464, 3139, 286, 4881, 318, 6342, 11};
-#define PREFILL_COUNT (sizeof(PREFILL_TOKENS) / sizeof(PREFILL_TOKENS[0]))
-
-typedef struct {
-    GPT2Model *cpu_model;
-    GPT2GpuModel *gpu_model;
-    GPT2GpuKvCache *cache;
-} PrefillFixture;
-
-static PrefillFixture make_fixture(void) {
-    PrefillFixture fixture;
-    fixture.cpu_model = gpt2_model_load(WEIGHTS_DIR);
-    ASSERT_TRUE(fixture.cpu_model != NULL);
-    fixture.gpu_model = gpt2_gpu_model_create(fixture.cpu_model);
-    ASSERT_TRUE(fixture.gpu_model != NULL);
-    fixture.cache = gpt2_gpu_kv_cache_create();
-    ASSERT_TRUE(fixture.cache != NULL);
-    return fixture;
-}
-
-static void free_fixture(PrefillFixture *fixture) {
-    gpt2_gpu_kv_cache_free(fixture->cache);
-    gpt2_gpu_model_free(fixture->gpu_model);
-    gpt2_model_free(fixture->cpu_model);
 }
 
 TEST(prefill_returns_the_same_logits_as_forward_last) {
@@ -260,16 +214,6 @@ TEST(kv_cache_copy_layer_rejects_bad_arguments) {
     free(k);
     free(v);
     free_fixture(&fixture);
-}
-
-static int argmax_of(const float *values, size_t count) {
-    size_t best = 0;
-    for (size_t index = 1; index < count; index++) {
-        if (values[index] > values[best]) {
-            best = index;
-        }
-    }
-    return (int)best;
 }
 
 // prefill + decode must give the logits of a full forward pass over the same tokens.

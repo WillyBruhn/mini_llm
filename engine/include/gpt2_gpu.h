@@ -67,6 +67,20 @@ int gpt2_gpu_prefill(GPT2GpuModel *model,
                      size_t sequence_length,
                      float *logits);
 
+// Keeps a second copy of the weights of the decode matrix products in fp16 (about +247 MB of
+// GPU memory) and makes gpt2_gpu_decode use them. A decode step reads every weight once, so it
+// is limited by memory bandwidth, and half the bytes make it faster. The accumulation, the
+// activations, the KV cache, layernorm and the biases stay fp32. gpt2_gpu_prefill and
+// gpt2_gpu_forward_last still use the fp32 weights. Returns 1 on success, or 0 for a NULL model.
+// Calling it again does nothing.
+int gpt2_gpu_model_enable_fp16_decode(GPT2GpuModel *model);
+
+// 1 after gpt2_gpu_model_enable_fp16_decode, otherwise 0.
+int gpt2_gpu_model_uses_fp16_decode(const GPT2GpuModel *model);
+
+// GPU memory taken by the fp16 copy of the weights, or 0 if it is not enabled.
+size_t gpt2_gpu_model_fp16_bytes(const GPT2GpuModel *model);
+
 // One generation step. `token` is the newest token, the one the model just predicted. It is
 // not in the cache yet. It gets position `length`, its K and V are stored, `length` grows by
 // one, and the logits for the token after it are written.

@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from mini_llm.native import NativeGPT2
+from mini_llm.native import EngineOptions, NativeGPT2
 
 ROOT = Path(__file__).resolve().parents[2]
 WEIGHTS = ROOT / "engine/tests/reference_data/weights"
@@ -68,7 +68,9 @@ def test_kv_cache_generates_the_same_tokens_as_recomputing() -> None:
 def test_sessions_reuse_a_cache_without_leaking_the_previous_sequence() -> None:
     first = [464, 3139, 286, 4881, 318]
     second = [15496, 11, 995, 0, 50, 60, 70]
-    with NativeGPT2(WEIGHTS, GPU_LIBRARY, "gpu", max_sessions=1) as engine:
+    with NativeGPT2(
+        WEIGHTS, GPU_LIBRARY, "gpu", EngineOptions(max_sessions=1)
+    ) as engine:
         expected_first = _greedy_recompute(engine, first, 8)
         expected_second = _greedy_recompute(engine, second, 8)
         # max_sessions=1 forces the second run to reuse the first run's cache.
@@ -82,7 +84,9 @@ def test_sessions_reuse_a_cache_without_leaking_the_previous_sequence() -> None:
 def test_concurrent_sessions_do_not_mix_up_their_caches() -> None:
     prompts = [[464, 3139, 286, 4881, 318], [15496, 11, 995], [40, 588, 257, 5916]]
     results: dict[int, list[int]] = {}
-    with NativeGPT2(WEIGHTS, GPU_LIBRARY, "gpu", max_sessions=2) as engine:
+    with NativeGPT2(
+        WEIGHTS, GPU_LIBRARY, "gpu", EngineOptions(max_sessions=2)
+    ) as engine:
         expected = [_greedy_recompute(engine, p, 10) for p in prompts]
 
         def run(index: int) -> None:
@@ -99,7 +103,9 @@ def test_concurrent_sessions_do_not_mix_up_their_caches() -> None:
 
 @needs_gpu
 def test_session_gives_its_cache_back_after_an_error_and_when_closed_twice() -> None:
-    with NativeGPT2(WEIGHTS, GPU_LIBRARY, "gpu", max_sessions=1) as engine:
+    with NativeGPT2(
+        WEIGHTS, GPU_LIBRARY, "gpu", EngineOptions(max_sessions=1)
+    ) as engine:
         with pytest.raises(RuntimeError):
             with engine.open_session() as session:
                 session.decode(5)  # no prefill yet: the cache is empty
@@ -111,8 +117,42 @@ def test_session_gives_its_cache_back_after_an_error_and_when_closed_twice() -> 
 @needs_gpu
 def test_without_kv_cache_a_session_recomputes() -> None:
     prompt = [464, 3139, 286, 4881, 318]
-    with NativeGPT2(WEIGHTS, GPU_LIBRARY, "gpu", use_kv_cache=False) as engine:
+    with NativeGPT2(
+        WEIGHTS, GPU_LIBRARY, "gpu", EngineOptions(use_kv_cache=False)
+    ) as engine:
         assert not engine.use_kv_cache
         assert _greedy_session(engine, prompt, 6) == _greedy_recompute(
             engine, prompt, 6
         )
+
+
+@needs_gpu
+def test_fp16_decode_generates_text_close_to_fp32() -> None:
+    prompt = [464, 3139, 286, 4881, 318]  # "The capital of France is"
+    with NativeGPT2(WEIGHTS, GPU_LIBRARY, "gpu") as reference:
+        expected_logits = reference.forward_last(np.asarray(prompt, dtype=np.int32))
+        expected = _greedy_session(reference, prompt, 12)
+    with NativeGPT2(
+        WEIGHTS, GPU_LIBRARY, "gpu", EngineOptions(fp16_decode=True)
+    ) as engine:
+        assert engine.fp16_decode
+        with engine.open_session() as session:
+            # The prompt is read with the fp32 weights, so its logits are the same.
+            logits = session.prefill(np.asarray(prompt, dtype=np.int32))
+            np.testing.assert_array_equal(logits, expected_logits)
+        actual = _greedy_session(engine, prompt, 12)
+    # One close call may change the text. For this prompt the first tokens must agree.
+    assert actual[:4] == expected[:4]
+
+
+@needs_gpu
+def test_fp16_decode_needs_the_gpu_and_the_cache() -> None:
+    with pytest.raises(ValueError):
+        NativeGPT2(
+            WEIGHTS,
+            GPU_LIBRARY,
+            "gpu",
+            EngineOptions(use_kv_cache=False, fp16_decode=True),
+        )
+    with pytest.raises(ValueError):
+        NativeGPT2(WEIGHTS, CPU_LIBRARY, "cpu", EngineOptions(fp16_decode=True))

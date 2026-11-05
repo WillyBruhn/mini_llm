@@ -14,7 +14,8 @@ CUDA_SANITIZER ?= /usr/local/cuda-12.6
 # Source files
 CPU_SRCS = $(wildcard engine/src/*.c)
 CPU_OBJS = $(patsubst engine/src/%.c,$(BUILD)/%.o,$(CPU_SRCS))
-TEST_SRCS = $(filter-out engine/tests/test_gpt2.c engine/tests/test_gpt2_gpu.c,$(wildcard engine/tests/test_*.c))
+GPT2_GPU_TEST_SRCS = engine/tests/test_gpt2_gpu.c engine/tests/test_gpt2_gpu_half.c
+TEST_SRCS = $(filter-out engine/tests/test_gpt2.c $(GPT2_GPU_TEST_SRCS),$(wildcard engine/tests/test_*.c))
 CUDA_SRCS = $(wildcard engine/src/*.cu)
 GPU_TEST_SRCS = $(wildcard engine/tests/test_*.cu)
 
@@ -52,11 +53,13 @@ gpt2-gpu-test: $(BUILD)/test_gpt2_gpu
 
 NVLINK_DEPS = $(CUDA_SRCS) $(filter-out $(BUILD)/main.o,$(CPU_OBJS)) $(wildcard engine/include/*.h)
 
-$(BUILD)/test_gpt2_gpu.o: engine/tests/test_gpt2_gpu.c engine/tests/test_util.h $(wildcard engine/include/*.h) | $(BUILD)
+GPT2_GPU_TEST_OBJS = $(patsubst engine/tests/%.c,$(BUILD)/%.o,$(GPT2_GPU_TEST_SRCS))
+
+$(GPT2_GPU_TEST_OBJS): $(BUILD)/%.o: engine/tests/%.c engine/tests/test_util.h engine/tests/test_gpt2_gpu_common.h $(wildcard engine/include/*.h) | $(BUILD)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-$(BUILD)/test_gpt2_gpu: $(BUILD)/test_gpt2_gpu.o $(NVLINK_DEPS) | $(BUILD)
-	$(NVCC) $(NVFLAGS) -o $@ $< $(CUDA_SRCS) $(filter-out $(BUILD)/main.o,$(CPU_OBJS)) $(LDFLAGS)
+$(BUILD)/test_gpt2_gpu: $(GPT2_GPU_TEST_OBJS) $(NVLINK_DEPS) | $(BUILD)
+	$(NVCC) $(NVFLAGS) -o $@ $(GPT2_GPU_TEST_OBJS) $(CUDA_SRCS) $(filter-out $(BUILD)/main.o,$(CPU_OBJS)) $(LDFLAGS)
 
 sanitize-gpu: $(BUILD)/test_runner_gpu_debug
 	CUDA_VISIBLE_DEVICES=$(GPU) \
@@ -80,11 +83,14 @@ $(BUILD)/test_runner_gpu_debug: $(GPU_TEST_SRCS) $(CUDA_SRCS) engine/tests/test_
 #   make bench-gpu BENCH_ARGS="--prompt-tokens 128 --decode-tokens 0"
 BENCH_ARGS ?=
 
-$(BUILD)/bench.o: engine/bench/bench.c $(wildcard engine/include/*.h) | $(BUILD)
+$(BUILD)/bench.o: engine/bench/bench.c engine/bench/bench_options.h $(wildcard engine/include/*.h) | $(BUILD)
 	$(CC) $(CFLAGS) -DGIT_SHA='"$(GIT_SHA)"' -DBUILD_FLAGS='"$(NVFLAGS)"' -c -o $@ $<
 
-$(BUILD)/bench: $(BUILD)/bench.o $(NVLINK_DEPS) | $(BUILD)
-	$(NVCC) $(NVFLAGS) -o $@ $< $(CUDA_SRCS) $(filter-out $(BUILD)/main.o,$(CPU_OBJS)) $(LDFLAGS)
+$(BUILD)/bench_options.o: engine/bench/bench_options.c engine/bench/bench_options.h $(wildcard engine/include/*.h) | $(BUILD)
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/bench: $(BUILD)/bench.o $(BUILD)/bench_options.o $(NVLINK_DEPS) | $(BUILD)
+	$(NVCC) $(NVFLAGS) -o $@ $(BUILD)/bench.o $(BUILD)/bench_options.o $(CUDA_SRCS) $(filter-out $(BUILD)/main.o,$(CPU_OBJS)) $(LDFLAGS)
 
 bench-gpu: $(BUILD)/bench
 	CUDA_VISIBLE_DEVICES=$(GPU) ./$< --backend gpu $(BENCH_ARGS)
@@ -107,7 +113,9 @@ profile-nsys: $(BUILD)/bench
 	CUDA_VISIBLE_DEVICES=$(GPU) nsys profile $(NSYS_FLAGS) --stats=true -o $(BUILD)/report ./$< $(PROFILE_ARGS)
 
 # Timeline of the cached decode steps only (after the prefill). Writes build/report_decode.nsys-rep.
-PROFILE_DECODE_ARGS ?= --backend gpu --prompt-tokens 128 --decode-tokens 41 --warmup 1 --runs 1 --no-check --kv-cache --profile-decode
+# Add --fp16-weights with PROFILE_DECODE_EXTRA=--fp16-weights.
+PROFILE_DECODE_EXTRA ?=
+PROFILE_DECODE_ARGS ?= --backend gpu --prompt-tokens 128 --decode-tokens 41 --warmup 1 --runs 1 --no-check --kv-cache --profile-decode $(PROFILE_DECODE_EXTRA)
 profile-nsys-decode: $(BUILD)/bench
 	CUDA_VISIBLE_DEVICES=$(GPU) nsys profile $(NSYS_FLAGS) --stats=true -o $(BUILD)/report_decode ./$< $(PROFILE_DECODE_ARGS)
 
