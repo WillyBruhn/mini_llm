@@ -222,24 +222,24 @@ void transformer_block_decode_device(const float *d_input,
                                      int layer) {
     float *row_k = cache_k + position * hidden_size;
     float *row_v = cache_v + position * hidden_size;
+    int use_half = half != NULL;
 
     gpu_timer_begin(timer, GPU_STAGE_LAYERNORM, layer);
     layernorm_device(s->ln1, d_input, w->ln1_gamma, w->ln1_beta, 1, hidden_size, epsilon);
     gpu_timer_end(timer);
 
-    // K and V go straight into their cache row. Q is only needed for this token.
+    // q, k and v are ONE launch (three products). K and V go straight into their cache row.
+    // Q is only needed for this token.
     gpu_timer_begin(timer, GPU_STAGE_QKV, layer);
-    if (half != NULL) {
-        linear_half_device(s->ln1, half->query_weights, w->query_bias, s->q, hidden_size,
-                           hidden_size);
-        linear_half_device(s->ln1, half->key_weights, w->key_bias, row_k, hidden_size, hidden_size);
-        linear_half_device(s->ln1, half->value_weights, w->value_bias, row_v, hidden_size,
-                           hidden_size);
-    } else {
-        linear_device(s->ln1, w->query_weights, w->query_bias, s->q, 1, hidden_size, hidden_size);
-        linear_device(s->ln1, w->key_weights, w->key_bias, row_k, 1, hidden_size, hidden_size);
-        linear_device(s->ln1, w->value_weights, w->value_bias, row_v, 1, hidden_size, hidden_size);
-    }
+    MatvecProduct qkv[3] = {
+        {use_half ? NULL : w->query_weights, use_half ? half->query_weights : NULL, w->query_bias,
+         NULL, s->q},
+        {use_half ? NULL : w->key_weights, use_half ? half->key_weights : NULL, w->key_bias, NULL,
+         row_k},
+        {use_half ? NULL : w->value_weights, use_half ? half->value_weights : NULL, w->value_bias,
+         NULL, row_v},
+    };
+    matvec_fused_device(s->ln1, qkv, 3, MATVEC_EPILOGUE_BIAS, hidden_size, hidden_size);
     gpu_timer_end(timer);
 
     gpu_timer_begin(timer, GPU_STAGE_ATTENTION, layer);
@@ -247,50 +247,33 @@ void transformer_block_decode_device(const float *d_input,
                             hidden_size / n_heads);
     gpu_timer_end(timer);
 
+    // The projection also adds the residual: s->residual = d_input + (attention * W + bias).
     gpu_timer_begin(timer, GPU_STAGE_ATTN_PROJ, layer);
-    if (half != NULL) {
-        linear_half_device(s->attention, half->attention_weights, w->attention_bias, s->projected,
-                           hidden_size, hidden_size);
-    } else {
-        linear_device(s->attention, w->attention_weights, w->attention_bias, s->projected, 1,
-                      hidden_size, hidden_size);
-    }
-    gpu_timer_end(timer);
-
-    gpu_timer_begin(timer, GPU_STAGE_RESIDUAL_ADD, layer);
-    vectoraddition_device(d_input, s->projected, s->residual, hidden_size);
+    MatvecProduct projection = {use_half ? NULL : w->attention_weights,
+                                use_half ? half->attention_weights : NULL, w->attention_bias,
+                                d_input, s->residual};
+    matvec_fused_device(s->attention, &projection, 1, MATVEC_EPILOGUE_BIAS_RESIDUAL, hidden_size,
+                        hidden_size);
     gpu_timer_end(timer);
 
     gpu_timer_begin(timer, GPU_STAGE_LAYERNORM, layer);
     layernorm_device(s->ln2, s->residual, w->ln2_gamma, w->ln2_beta, 1, hidden_size, epsilon);
     gpu_timer_end(timer);
 
+    // MLP up also applies gelu.
     gpu_timer_begin(timer, GPU_STAGE_MLP_UP, layer);
-    if (half != NULL) {
-        linear_half_device(s->ln2, half->mlp_up_weights, w->mlp_up_bias, s->mlp_up, hidden_size,
-                           mlp_size);
-    } else {
-        linear_device(s->ln2, w->mlp_up_weights, w->mlp_up_bias, s->mlp_up, 1, hidden_size,
-                      mlp_size);
-    }
+    MatvecProduct up = {use_half ? NULL : w->mlp_up_weights, use_half ? half->mlp_up_weights : NULL,
+                        w->mlp_up_bias, NULL, s->mlp_activated};
+    matvec_fused_device(s->ln2, &up, 1, MATVEC_EPILOGUE_BIAS_GELU, hidden_size, mlp_size);
     gpu_timer_end(timer);
 
-    gpu_timer_begin(timer, GPU_STAGE_GELU, layer);
-    gelu_new_device(s->mlp_activated, s->mlp_up, mlp_size);
-    gpu_timer_end(timer);
-
+    // MLP down also adds the residual: d_out = s->residual + (activated * W + bias).
     gpu_timer_begin(timer, GPU_STAGE_MLP_DOWN, layer);
-    if (half != NULL) {
-        linear_half_device(s->mlp_activated, half->mlp_down_weights, w->mlp_down_bias, d_out,
-                           mlp_size, hidden_size);
-    } else {
-        linear_device(s->mlp_activated, w->mlp_down_weights, w->mlp_down_bias, d_out, 1, mlp_size,
-                      hidden_size);
-    }
-    gpu_timer_end(timer);
-
-    gpu_timer_begin(timer, GPU_STAGE_RESIDUAL_ADD, layer);
-    vectoraddition_device(s->residual, d_out, d_out, hidden_size);
+    MatvecProduct down = {use_half ? NULL : w->mlp_down_weights,
+                          use_half ? half->mlp_down_weights : NULL, w->mlp_down_bias, s->residual,
+                          d_out};
+    matvec_fused_device(s->mlp_activated, &down, 1, MATVEC_EPILOGUE_BIAS_RESIDUAL, mlp_size,
+                        hidden_size);
     gpu_timer_end(timer);
 }
 

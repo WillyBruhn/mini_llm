@@ -1,3 +1,4 @@
+#include "../include/cuda_check.h"
 #include "../include/matrix_mult.h"
 #include "test_gpt2_gpu_common.h"
 
@@ -107,27 +108,35 @@ TEST(fp16_decode_really_uses_the_fp16_weights) {
     free_fixture(&fixture);
 }
 
-// One decode step must run the fp16 kernel for every product: 6 per layer plus the output head.
-// And it must not run the fp32 single-row kernel at all. Without fp16 it is the other way round.
-// This tells apart "the blocks use fp16" from "the head uses fp16", which the logits cannot.
-TEST(every_decode_product_uses_the_matching_kernel) {
+// One decode step: 12 layers x (2 layernorm + 1 fused q/k/v + 1 attention + projection + MLP up
+// + MLP down) + embed + final layernorm + output head = 87 launches. Before the fusion it was
+// 219. The bias, residual and gelu kernels are part of the matrix-vector launches now.
+#define LAUNCHES_PER_DECODE_STEP (GPT2_N_LAYER * 7 + 3)
+
+// And every product must still use the matching weights: 4 matrix-vector launches per layer
+// plus the head. fp16 runs only the fp16 kernel, fp32 only the fp32 kernel.
+TEST(a_decode_step_is_87_launches_and_every_product_uses_the_matching_kernel) {
     PrefillFixture fixture = make_fixture();
     float *logits = malloc(GPT2_N_VOCAB * sizeof(float));
     ASSERT_TRUE(logits != NULL);
     ASSERT_TRUE(
         gpt2_gpu_prefill(fixture.gpu_model, fixture.cache, PREFILL_TOKENS, PREFILL_COUNT, logits));
 
+    unsigned long launches_before = cuda_launch_count();
     unsigned long float_before = matvec_launch_count();
     unsigned long half_before = matvec_half_launch_count();
     ASSERT_TRUE(gpt2_gpu_decode(fixture.gpu_model, fixture.cache, 11, logits, NULL));
-    ASSERT_TRUE(matvec_launch_count() - float_before == 6 * GPT2_N_LAYER + 1);
+    ASSERT_TRUE(cuda_launch_count() - launches_before == LAUNCHES_PER_DECODE_STEP);
+    ASSERT_TRUE(matvec_launch_count() - float_before == 4 * GPT2_N_LAYER + 1);
     ASSERT_TRUE(matvec_half_launch_count() == half_before);
 
     ASSERT_TRUE(gpt2_gpu_model_enable_fp16_decode(fixture.gpu_model));
+    launches_before = cuda_launch_count();
     float_before = matvec_launch_count();
     half_before = matvec_half_launch_count();
     ASSERT_TRUE(gpt2_gpu_decode(fixture.gpu_model, fixture.cache, 11, logits, NULL));
-    ASSERT_TRUE(matvec_half_launch_count() - half_before == 6 * GPT2_N_LAYER + 1);
+    ASSERT_TRUE(cuda_launch_count() - launches_before == LAUNCHES_PER_DECODE_STEP);
+    ASSERT_TRUE(matvec_half_launch_count() - half_before == 4 * GPT2_N_LAYER + 1);
     ASSERT_TRUE(matvec_launch_count() == float_before);
 
     free(logits);

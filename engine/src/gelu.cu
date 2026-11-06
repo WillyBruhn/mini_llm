@@ -1,5 +1,6 @@
 #include "../include/gelu.h"
 #include "../include/cuda_check.h"
+#include "../include/gelu_math.h"
 #include "../include/util.h"
 #include <cuda_runtime.h>
 #include <math.h>
@@ -20,11 +21,7 @@ __global__ void gelu_new_kernel(float *out, const float *input, size_t n) {
         return;
     }
 
-    const float coefficient = 0.7978845608f;
-    const float cubic = 0.044715f;
-    float value = input[index];
-    float argument = coefficient * (value + cubic * value * value * value);
-    out[index] = 0.5f * value * (1.0f + tanhf(argument));
+    out[index] = gelu_new_value(input[index]);
 }
 
 void gelu_device(float *d_out, const float *d_input, size_t n) {

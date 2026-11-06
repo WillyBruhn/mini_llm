@@ -72,10 +72,10 @@ $(BUILD)/test_runner: $(TEST_SRCS) engine/tests/test_util.h $(filter-out $(BUILD
 $(BUILD)/test_gpt2: engine/tests/test_gpt2.c engine/tests/test_util.h $(filter-out $(BUILD)/main.o,$(CPU_OBJS)) | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ engine/tests/test_gpt2.c $(filter-out $(BUILD)/main.o,$(CPU_OBJS)) $(LDFLAGS)
 
-$(BUILD)/test_runner_gpu: $(GPU_TEST_SRCS) $(CUDA_SRCS) engine/tests/test_util.h $(filter-out $(BUILD)/main.o,$(CPU_OBJS)) | $(BUILD)
+$(BUILD)/test_runner_gpu: $(GPU_TEST_SRCS) $(CUDA_SRCS) engine/tests/test_util.h $(wildcard engine/include/*.h) $(wildcard engine/tests/*.h) $(filter-out $(BUILD)/main.o,$(CPU_OBJS)) | $(BUILD)
 	$(NVCC) $(NVFLAGS) -o $@ $(GPU_TEST_SRCS) $(CUDA_SRCS) $(filter-out $(BUILD)/main.o,$(CPU_OBJS)) $(LDFLAGS)
 
-$(BUILD)/test_runner_gpu_debug: $(GPU_TEST_SRCS) $(CUDA_SRCS) engine/tests/test_util.h $(filter-out $(BUILD)/main.o,$(CPU_OBJS)) | $(BUILD)
+$(BUILD)/test_runner_gpu_debug: $(GPU_TEST_SRCS) $(CUDA_SRCS) engine/tests/test_util.h $(wildcard engine/include/*.h) $(wildcard engine/tests/*.h) $(filter-out $(BUILD)/main.o,$(CPU_OBJS)) | $(BUILD)
 	$(NVCC) -g -G -O0 -DTEST_NO_FORK $(NVFLAGS) -o $@ $(GPU_TEST_SRCS) $(CUDA_SRCS) $(filter-out $(BUILD)/main.o,$(CPU_OBJS)) $(LDFLAGS)
 
 # --- Benchmark ---

@@ -31,14 +31,6 @@ void linear_device(const float *d_input,
                    size_t input_columns,
                    size_t output_columns);
 
-// One input row times fp16 weights, plus the fp32 bias. See matvec_half_device.
-void linear_half_device(const float *d_input,
-                        const unsigned short *d_half_weights,
-                        const float *d_bias,
-                        float *d_out,
-                        size_t input_columns,
-                        size_t output_columns);
-
 #ifdef __cplusplus
 }
 #endif

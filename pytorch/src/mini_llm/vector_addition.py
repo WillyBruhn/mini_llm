@@ -46,6 +46,7 @@ _extension = cast(
             str(_project_root / "pytorch/src/mini_llm/vector_addition_extension.cpp"),
             str(_project_root / "engine/src/vector_addition.c"),
             str(_project_root / "engine/src/vector_addition.cu"),
+            str(_project_root / "engine/src/launch_count.cu"),
             str(_project_root / "engine/src/attention.c"),
             str(_project_root / "engine/src/embedding.c"),
             str(_project_root / "engine/src/gelu.c"),

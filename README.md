@@ -4,7 +4,7 @@ Having fun with implementing a llm from scratch.
 Implemented in C and CUDA with pytorch bindings.
 First I optimized a single request (kernels, then a KV cache). Now it is served by a FastAPI server with a load test, and the goal is to build the pieces of an engine like vllm and learn how they work.
 
-Status: GPT-2 small on one RTX 3060 generates **~450 tokens/s** (was 3.4 tok/s in the first GPU version). The server handles one request at a time. A **scheduler with batched decode** is the next step, then a paged KV cache.
+Status: GPT-2 small on one RTX 3060 generates **~630 tokens/s** (fp16 weights; ~420 with fp32) (was 3.4 tok/s in the first GPU version). The server handles one request at a time. A **scheduler with batched decode** is the next step, then a paged KV cache.
 
 Intermediate Goal: Learn to use nsys and ncu proerly and learn which optimizations work.
 
@@ -21,7 +21,8 @@ GPT-2 Small, RTX 3060, 32-token prompt, greedy decoding, 16 decode tokens, one s
 | + KV cache and a parallel decode attention kernel | 22.2 ms (unchanged) | 86.7 tok/s | [003](docs/003_kv_cache.md) |
 | + matrix-vector kernel for single-row products (decode) | 21.9 ms | 204.8 tok/s | [004](docs/004_gemv.md) |
 | + layernorm: one block per row | 16.3 ms | 323.1 tok/s | [005](docs/005_layernorm.md) |
-| + fp16 weights in the decode matrix products (opt-in) | 16.3 ms (unchanged) | **422.2 tok/s** | [006](docs/006_fp16_weights.md) |
+| + fp16 weights in the decode matrix products (opt-in) | 16.3 ms (unchanged) | 422.2 tok/s | [006](docs/006_fp16_weights.md) |
+| + fewer launches per decode step (219 → 87): bias, gelu, residual fused into the matrix-vector kernel | 16.3 ms (unchanged) | 335.0 tok/s (fp32), **459.2 tok/s** (fp16) | [007](docs/007_fewer_launches.md) |
 
 - Since the first GPU version: prefill (32 tokens) is **10.7x** faster (174 → 16.3 ms) and decode is **95x** faster in fp32 (3.4 → 323 tok/s) and **124x** with fp16 weights (422 tok/s). Most of the decode gain is the KV cache (every step used to run the whole sequence again) and the matrix-vector kernel.
 - Attention kernel: 16.9 ms → 0.81 ms (**21x**), found with Nsight Compute (one loop did the same dot product 64 times).
@@ -31,9 +32,9 @@ GPT-2 Small, RTX 3060, 32-token prompt, greedy decoding, 16 decode tokens, one s
 Where the time goes now:
 
 - **Prefill** (one pass over 32 tokens, 16.4 ms of kernels): attention 38%, matmuls 54%, layernorm 1%. The old attention kernel is the next prefill target.
-- **Decode** (one token, fp16 weights, 1.57 ms of kernels): the matrix products 1.18 ms (75%: q/k/v 23%, output head 16%, MLP 30%, attention projection 6%), attention 17%, layernorm 4.5%. It is memory-bound: it reads each weight once.
+- **Decode** (one token, fp16 weights, 1.28 ms of kernels in 87 launches): attention 22%, output head 20%, MLP 34%, q/k/v 13%, attention projection 6%, layernorm 6%. The matrix products are memory-bound: they read each weight once.
 
-The decode column is for 16 tokens. Without a KV cache the decode speed falls as the output gets longer (34.7 tok/s for 16 tokens, 2.7 tok/s for 900). With the cache it stays flat: 88 to 93 tok/s with the matrix-matrix kernel, 222 to 247 tok/s with the matrix-vector kernel, 351 to 417 tok/s with the faster layernorm, 480 to 614 tok/s with fp16 weights.
+The decode column is for 16 tokens. Without a KV cache the decode speed falls as the output gets longer (34.7 tok/s for 16 tokens, 2.7 tok/s for 900). With the cache it stays flat: 88 to 93 tok/s with the matrix-matrix kernel, 222 to 247 tok/s with the matrix-vector kernel, 351 to 417 tok/s with the faster layernorm, 480 to 614 tok/s with fp16 weights, and about 10% more with the fused launches (457 tok/s fp32 and 696 tok/s fp16 at 200 tokens).
 
 ## Serving
 
@@ -47,7 +48,8 @@ At a glance, 20 concurrent users, 128 new tokens per request. Each row is one re
 | + KV cache | 90.9 | 220 ms | 28.1 s | [003](docs/003_kv_cache.md) |
 | + matrix-vector kernel | 237.2 | 82.6 ms | 10.8 s | [004](docs/004_gemv.md) |
 | + layernorm, one block per row | 370.0 | 52.6 ms | 6.9 s | [005](docs/005_layernorm.md) |
-| + fp16 weights in decode (opt-in) | **445.4** | **43.7 ms** | **5.7 s** | [006](docs/006_fp16_weights.md) |
+| + fp16 weights in decode (opt-in) | 445.4 | 43.7 ms | 5.7 s | [006](docs/006_fp16_weights.md) |
+| + fewer launches (fp32 weights: 422.4 tok/s, 45.6 ms, 6.1 s) | **627.3** | **29.9 ms** | **4.1 s** | [007](docs/007_fewer_launches.md) |
 
 Throughput is flat from 1 to 20 users in every row, because the requests wait for each other. The latency grows with the number of users instead. This is what batching has to change.
 
@@ -155,6 +157,28 @@ A decode step reads every weight once, so it is limited by memory bandwidth (ncu
 - One decode step: 2.30 ms → 1.57 ms of kernel time (1.46x). The five matrix-vector stages went from 1.90 ms to 1.18 ms (1.61x).
 - The server gains less than the kernels (1.19x–1.28x). The time outside the kernels grew from 0.38 to 0.68 ms per token (30% of a token). I did not find the cause yet.
 - Accuracy over 1200 teacher-forced positions: top-1 agreement 100%, mean KL 5.7e-06 nats, and all 12 prompts give the same 100 greedy tokens. The largest single logit difference is 3.5 (at a top logit of 42), above the 0.1 that I had set as a limit, so that criterion is reported as not met. See the report.
+
+### With fewer launches per decode step ([report 007](docs/007_fewer_launches.md))
+
+A decode step had 219 kernel launches. The CPU needs about 3 µs to launch a kernel, and 61% of the kernels (bias, residual add, gelu, small layernorms) run for less than that, so the GPU waited for the CPU: with fp16 weights it was idle 20% of the step (0.40 ms of 1.93 ms), and 71% of that idle time was waiting for a launch. The bias, gelu and residual add now happen in the epilogue of the matrix-vector kernel, and q, k and v are one launch with three products: **87 launches** per step. The logits are bit-for-bit the same as before (12.4 M values checked). Same workload, before and after in the same session:
+
+128 new tokens per request, fp16 weights:
+
+| Users | tok/s before | tok/s after | Speedup | Inter-token p50 before | after | End-to-end p50 before | after |
+|---|---|---|---|---|---|---|---|
+| 1 | 498.3 | 534.8 | 1.07x | 1.8 ms | 1.7 ms | 0.24 s | 0.22 s |
+| 5 | 447.0 | 618.9 | 1.38x | 10.7 ms | 7.5 ms | 1.41 s | 1.02 s |
+| 10 | 444.6 | 621.1 | 1.40x | 21.7 ms | 15.0 ms | 2.87 s | 2.07 s |
+| 20 | 447.0 | 627.3 | 1.40x | 43.5 ms | 29.9 ms | 5.70 s | 4.11 s |
+
+With fp32 weights: 369 → 422 tok/s at 20 users (1.14x).
+
+![Fewer launches, 128 tokens](docs/images/007_fewer_launches_128.png)
+
+- One fp16 decode step: 1.93 ms → 1.53 ms from one step's first kernel to the next one's. The GPU idle time inside a step fell from 0.40 ms to 0.12 ms.
+- The server gained more than the kernel time suggests (1.40x against 1.22x). The time outside the kernels fell from 0.68 to 0.31 ms per token; I did not prove why.
+- A first version of the fused kernel was slower than the old kernels (a 96-byte stack frame from indexing the kernel arguments). The report describes the fix.
+- Compute-sanitizer memcheck and racecheck report no errors on the 60 kernel tests.
 
 ## Run
 

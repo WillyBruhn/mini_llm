@@ -18,8 +18,26 @@
         }                                                                                        \
     } while (0)
 
+// Number of kernel launches checked with CUDA_CHECK_LAUNCH in this process. Tests use it to
+// pin the launches of a decode step: every launch of a step costs the CPU about 3 us, more
+// than a short kernel runs. It is defined in launch_count.cu. Not thread-safe, like the other
+// counters of the engine: the GPU model is used under a lock.
+#ifdef __cplusplus
+extern "C" {
+#endif
+unsigned long cuda_launch_count(void);
+void cuda_launch_counted(void);
+#ifdef __cplusplus
+}
+#endif
+
 // Call right after a kernel launch. A launch itself returns no error, so this
 // reads the error that the launch set (for example a bad block size).
-#define CUDA_CHECK_LAUNCH() CUDA_CHECK(cudaGetLastError())
+// It also counts the launch.
+#define CUDA_CHECK_LAUNCH()             \
+    do {                                \
+        cuda_launch_counted();          \
+        CUDA_CHECK(cudaGetLastError()); \
+    } while (0)
 
 #endif
