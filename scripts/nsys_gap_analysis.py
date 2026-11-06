@@ -40,16 +40,46 @@ def load(report: str) -> sqlite3.Connection:
     return sqlite3.connect(sqlite_path)
 
 
+Kernel = tuple[int, int, str, int]
+
+
+def split_steps(kernels: list[Kernel], server: bool) -> list[list[Kernel]]:
+    """Group the kernels into decode steps. A step starts with the embed kernel."""
+    steps: list[list[Kernel]] = []
+    for kernel in kernels:
+        if kernel[2].startswith("embed_tokens"):
+            steps.append([])
+        if steps:
+            steps[-1].append(kernel)
+    steps = steps[1:-1]  # the first and last step touch the edge of the capture
+    if server:
+        # A server run also has prefills, which are longer. A decode step is the common size.
+        sizes = [len(step) for step in steps]
+        decode_size = max(set(sizes), key=sizes.count)
+        steps = [step for step in steps if len(step) == decode_size]
+    return steps
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("report")
+    parser.add_argument(
+        "--server",
+        action="store_true",
+        help="report of a whole server run (no 'profiled runs' range): use every decode step",
+    )
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
     db = load(args.report)
-    start, end = db.execute(
-        "select start, end from NVTX_EVENTS where text='profiled runs'"
-    ).fetchone()
+    if args.server:
+        start, end = db.execute(
+            "select min(start), max(end) from CUPTI_ACTIVITY_KIND_KERNEL"
+        ).fetchone()
+    else:
+        start, end = db.execute(
+            "select start, end from NVTX_EVENTS where text='profiled runs'"
+        ).fetchone()
     kernels = db.execute(
         "select k.start, k.end, s.value, k.correlationId from CUPTI_ACTIVITY_KIND_KERNEL k "
         "join StringIds s on s.id = k.shortName where k.start >= ? and k.end <= ? order by k.start",
@@ -62,13 +92,7 @@ def main() -> None:
             (start - 1_000_000, end),
         )
     }
-    steps: list[list[tuple[int, int, str, int]]] = []
-    for kernel in kernels:
-        if kernel[2].startswith("embed_tokens"):
-            steps.append([])
-        if steps:
-            steps[-1].append(kernel)
-    steps = steps[1:-1]  # the first and last step touch the edge of the capture
+    steps = split_steps(kernels, args.server)
     count = len(steps)
 
     busy = sum(k[1] - k[0] for step in steps for k in step) / count
@@ -85,7 +109,12 @@ def main() -> None:
             if launch is not None and after[0] - launch[1] < LAUNCH_LAG_NS:
                 waiting_for_cpu += gap
     between = [steps[i + 1][0][0] - steps[i][-1][1] for i in range(count - 1)]
+    between = [gap for gap in between if gap < 5_000_000] or between
     period = (steps[-1][0][0] - steps[0][0][0]) / (count - 1)
+    # The mean above includes the pauses between requests of a server run. The median does not.
+    median_period = statistics.median(
+        steps[i + 1][0][0] - steps[i][0][0] for i in range(count - 1)
+    )
     durations = [k[1] - k[0] for step in steps for k in step]
     launch_costs = [
         launches[k[3]][1] - launches[k[3]][0]
@@ -95,6 +124,7 @@ def main() -> None:
     ]
 
     logger.info("steps analysed: %d, launches per step: %d", count, len(steps[0]))
+    logger.info("median step period: %.3f ms", median_period / 1e6)
     logger.info(
         "step period (first kernel to the next first kernel): %.3f ms", period / 1e6
     )

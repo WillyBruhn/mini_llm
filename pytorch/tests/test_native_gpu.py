@@ -156,3 +156,86 @@ def test_fp16_decode_needs_the_gpu_and_the_cache() -> None:
         )
     with pytest.raises(ValueError):
         NativeGPT2(WEIGHTS, CPU_LIBRARY, "cpu", EngineOptions(fp16_decode=True))
+
+
+def _queued_session(
+    engine: NativeGPT2, prompt: list[int], steps: int, lookahead: bool
+) -> list[int]:
+    """The tokens of start/enqueue/take, with or without a step queued ahead."""
+    generated: list[int] = []
+    with engine.open_session() as session:
+        session.start(np.asarray(prompt, dtype=np.int32))
+        for step in range(steps):
+            more = step < steps - 1
+            if lookahead and more:
+                session.enqueue()
+            generated.append(session.take())
+            if not lookahead and more:
+                session.enqueue()
+    return generated
+
+
+@needs_gpu
+@pytest.mark.parametrize("lookahead", [False, True])
+@pytest.mark.parametrize("fp16", [False, True])
+def test_queued_session_generates_the_tokens_of_the_logits_path(
+    lookahead: bool, fp16: bool
+) -> None:
+    prompt = [464, 3139, 286, 4881, 318]
+    with NativeGPT2(
+        WEIGHTS, GPU_LIBRARY, "gpu", EngineOptions(fp16_decode=fp16)
+    ) as engine:
+        expected = _greedy_session(engine, prompt, 20)
+        assert _queued_session(engine, prompt, 20, lookahead) == expected
+
+
+@needs_gpu
+def test_queued_session_without_a_kv_cache_generates_the_same_tokens() -> None:
+    prompt = [464, 3139, 286, 4881, 318]
+    with NativeGPT2(
+        WEIGHTS, GPU_LIBRARY, "gpu", EngineOptions(use_kv_cache=False)
+    ) as engine:
+        expected = _greedy_recompute(engine, prompt, 6)
+        assert _queued_session(engine, prompt, 6, lookahead=True) == expected
+        assert _queued_session(engine, prompt, 6, lookahead=False) == expected
+
+
+@needs_gpu
+def test_queued_sessions_run_in_threads_without_mixing_their_tokens() -> None:
+    prompts = [[464, 3139, 286, 4881, 318], [15496, 11, 995], [40, 588, 257, 5916]]
+    results: dict[int, list[int]] = {}
+    with NativeGPT2(
+        WEIGHTS, GPU_LIBRARY, "gpu", EngineOptions(max_sessions=3)
+    ) as engine:
+        expected = [_greedy_session(engine, p, 24) for p in prompts]
+
+        def run(index: int) -> None:
+            results[index] = _queued_session(engine, prompts[index], 24, True)
+
+        threads = [threading.Thread(target=run, args=(i,)) for i in range(3)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+    assert [results[i] for i in range(3)] == expected
+
+
+@needs_gpu
+def test_queued_session_reports_misuse_and_a_reused_cache_starts_clean() -> None:
+    prompt = [464, 3139, 286, 4881, 318]
+    with NativeGPT2(
+        WEIGHTS, GPU_LIBRARY, "gpu", EngineOptions(max_sessions=1)
+    ) as engine:
+        expected = _greedy_session(engine, prompt, 8)
+        with engine.open_session() as session:
+            with pytest.raises(RuntimeError):
+                session.enqueue()  # nothing started
+            with pytest.raises(RuntimeError):
+                session.take()  # nothing queued
+            with pytest.raises(ValueError):
+                session.start(np.zeros(0, dtype=np.int32))
+            session.start(np.asarray(prompt, dtype=np.int32))
+            session.enqueue()
+            session.enqueue()  # two tokens stay queued and are never read
+        # The same cache again: the unread tokens of the last session must be gone.
+        assert _queued_session(engine, prompt, 8, lookahead=True) == expected

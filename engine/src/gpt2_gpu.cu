@@ -2,6 +2,7 @@
 
 #include "../include/cuda_check.h"
 #include "../include/embedding.h"
+#include "../include/gpt2_gpu_internal.h"
 #include "../include/layernorm.h"
 #include "../include/matrix_mult.h"
 #include "../include/transformer_block.h"
@@ -12,37 +13,6 @@
 #include <stdlib.h>
 
 static const float LAYERNORM_EPSILON = 1e-5f;
-
-struct GPT2GpuModel {
-    // Weights. They stay on the GPU for the whole life of the model.
-    float *token_embedding;    // [vocab, hidden]
-    float *position_embedding; // [positions, hidden]
-    float *final_ln_gamma;
-    float *final_ln_beta;
-    float *lm_head; // token_embedding transposed: [hidden, vocab]
-    TransformerBlockWeights blocks[GPT2_N_LAYER];
-
-    // Activation buffers, sized for the longest sequence.
-    TransformerBlockScratch scratch;
-    int *tokens;
-    float *hidden;
-    float *next_hidden;
-    float *final_norm; // [1, hidden]: only the last token goes through the head
-    float *logits;     // [1, vocab]
-
-    // Optional fp16 copy of the matrices that a decode step multiplies with.
-    int fp16_enabled;
-    size_t fp16_bytes;
-    TransformerBlockHalfWeights half_blocks[GPT2_N_LAYER];
-    unsigned short *half_lm_head; // [hidden, vocab]
-};
-
-// K and V of every past token of one sequence, one buffer per layer.
-struct GPT2GpuKvCache {
-    float *k[GPT2_N_LAYER]; // each [positions, hidden], row = token position
-    float *v[GPT2_N_LAYER];
-    size_t length; // tokens stored so far
-};
 
 static float *upload(const float *host, size_t count) {
     float *device = NULL;
@@ -110,6 +80,7 @@ GPT2GpuModel *gpt2_gpu_model_create(const GPT2Model *cpu_model) {
     model->next_hidden = allocate((size_t)GPT2_N_POSITIONS * GPT2_N_EMBD);
     model->final_norm = allocate(GPT2_N_EMBD);
     model->logits = allocate(GPT2_N_VOCAB);
+    CUDA_CHECK(cudaMalloc((void **)&model->next_token, sizeof(int)));
     return model;
 }
 
@@ -137,6 +108,7 @@ void gpt2_gpu_model_free(GPT2GpuModel *model) {
     CUDA_CHECK(cudaFree(model->next_hidden));
     CUDA_CHECK(cudaFree(model->final_norm));
     CUDA_CHECK(cudaFree(model->logits));
+    CUDA_CHECK(cudaFree(model->next_token));
     free(model);
 }
 
@@ -181,6 +153,7 @@ GPT2GpuKvCache *gpt2_gpu_kv_cache_create(void) {
         cache->k[layer] = allocate((size_t)GPT2_N_POSITIONS * GPT2_N_EMBD);
         cache->v[layer] = allocate((size_t)GPT2_N_POSITIONS * GPT2_N_EMBD);
     }
+    gpt2_gpu_token_queue_create(cache);
     return cache;
 }
 
@@ -188,6 +161,7 @@ void gpt2_gpu_kv_cache_free(GPT2GpuKvCache *cache) {
     if (cache == NULL) {
         return;
     }
+    gpt2_gpu_token_queue_destroy(cache);
     for (size_t layer = 0; layer < GPT2_N_LAYER; layer++) {
         CUDA_CHECK(cudaFree(cache->k[layer]));
         CUDA_CHECK(cudaFree(cache->v[layer]));
@@ -199,6 +173,7 @@ void gpt2_gpu_kv_cache_free(GPT2GpuKvCache *cache) {
 void gpt2_gpu_kv_cache_reset(GPT2GpuKvCache *cache) {
     if (cache != NULL) {
         cache->length = 0;
+        gpt2_gpu_token_queue_clear(cache);
     }
 }
 
@@ -218,7 +193,7 @@ int gpt2_gpu_kv_cache_copy_layer(
     return 1;
 }
 
-static int tokens_are_valid(const int *tokens, size_t sequence_length) {
+int gpt2_gpu_tokens_are_valid(const int *tokens, size_t sequence_length) {
     if (tokens == NULL || sequence_length == 0 || sequence_length > GPT2_N_POSITIONS) {
         return 0;
     }
@@ -241,17 +216,12 @@ static void store_layer_in_cache(const GPT2GpuModel *model,
     CUDA_CHECK(cudaMemcpyAsync(cache->v[layer], model->scratch.v, bytes, cudaMemcpyDeviceToDevice));
 }
 
-// The forward pass. If cache is not NULL, it also saves K and V of every layer and token.
-static int forward_pass(GPT2GpuModel *model,
-                        GPT2GpuKvCache *cache,
-                        const int *tokens,
-                        size_t sequence_length,
-                        float *logits,
-                        float *block_outputs,
-                        GpuTimer *timer) {
-    if (model == NULL || logits == NULL || !tokens_are_valid(tokens, sequence_length)) {
-        return 0;
-    }
+void gpt2_gpu_prefill_core(GPT2GpuModel *model,
+                           GPT2GpuKvCache *cache,
+                           const int *tokens,
+                           size_t sequence_length,
+                           float *block_outputs,
+                           GpuTimer *timer) {
     size_t hidden_elements = sequence_length * GPT2_N_EMBD;
 
     CUDA_CHECK(
@@ -291,7 +261,20 @@ static int forward_pass(GPT2GpuModel *model,
     matrixmult_device(model->final_norm, model->lm_head, model->logits, 1, GPT2_N_EMBD,
                       GPT2_N_VOCAB);
     gpu_timer_end(timer);
+}
 
+// The forward pass. If cache is not NULL, it also saves K and V of every layer and token.
+static int forward_pass(GPT2GpuModel *model,
+                        GPT2GpuKvCache *cache,
+                        const int *tokens,
+                        size_t sequence_length,
+                        float *logits,
+                        float *block_outputs,
+                        GpuTimer *timer) {
+    if (model == NULL || logits == NULL || !gpt2_gpu_tokens_are_valid(tokens, sequence_length)) {
+        return 0;
+    }
+    gpt2_gpu_prefill_core(model, cache, tokens, sequence_length, block_outputs, timer);
     CUDA_CHECK(
         cudaMemcpy(logits, model->logits, GPT2_N_VOCAB * sizeof(float), cudaMemcpyDeviceToHost));
     return 1;
@@ -319,22 +302,23 @@ int gpt2_gpu_prefill(GPT2GpuModel *model,
         return 0;
     }
     cache->length = sequence_length;
+    gpt2_gpu_token_queue_clear(cache);
     return 1;
 }
 
-int gpt2_gpu_decode(
-    GPT2GpuModel *model, GPT2GpuKvCache *cache, int token, float *logits, GpuTimer *timer) {
-    if (model == NULL || cache == NULL || logits == NULL || token < 0 || token >= GPT2_N_VOCAB ||
-        cache->length == 0 || cache->length >= GPT2_N_POSITIONS) {
-        return 0;
-    }
+int gpt2_gpu_can_decode(const GPT2GpuModel *model, const GPT2GpuKvCache *cache) {
+    return model != NULL && cache != NULL && cache->length > 0 && cache->length < GPT2_N_POSITIONS;
+}
+
+void gpt2_gpu_decode_core(GPT2GpuModel *model,
+                          GPT2GpuKvCache *cache,
+                          const int *d_token,
+                          GpuTimer *timer) {
     size_t position = cache->length;
 
-    CUDA_CHECK(cudaMemcpy(model->tokens, &token, sizeof(int), cudaMemcpyHostToDevice));
-
     gpu_timer_begin(timer, GPU_STAGE_EMBED, -1);
-    embed_tokens_device(model->hidden, model->tokens, model->token_embedding,
-                        model->position_embedding, 1, GPT2_N_EMBD, position);
+    embed_tokens_device(model->hidden, d_token, model->token_embedding, model->position_embedding,
+                        1, GPT2_N_EMBD, position);
     gpu_timer_end(timer);
 
     for (size_t layer = 0; layer < GPT2_N_LAYER; layer++) {
@@ -364,10 +348,20 @@ int gpt2_gpu_decode(
                           GPT2_N_VOCAB);
     }
     gpu_timer_end(timer);
+}
 
+int gpt2_gpu_decode(
+    GPT2GpuModel *model, GPT2GpuKvCache *cache, int token, float *logits, GpuTimer *timer) {
+    if (!gpt2_gpu_can_decode(model, cache) || logits == NULL || token < 0 ||
+        token >= GPT2_N_VOCAB) {
+        return 0;
+    }
+    CUDA_CHECK(cudaMemcpy(model->tokens, &token, sizeof(int), cudaMemcpyHostToDevice));
+    gpt2_gpu_decode_core(model, cache, model->tokens, timer);
     CUDA_CHECK(
         cudaMemcpy(logits, model->logits, GPT2_N_VOCAB * sizeof(float), cudaMemcpyDeviceToHost));
-    cache->length = position + 1;
+    cache->length += 1;
+    gpt2_gpu_token_queue_clear(cache);
     return 1;
 }
 

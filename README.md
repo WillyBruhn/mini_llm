@@ -4,7 +4,7 @@ Having fun with implementing a llm from scratch.
 Implemented in C and CUDA with pytorch bindings.
 First I optimized a single request (kernels, then a KV cache). Now it is served by a FastAPI server with a load test, and the goal is to build the pieces of an engine like vllm and learn how they work.
 
-Status: GPT-2 small on one RTX 3060 generates **~630 tokens/s** (fp16 weights; ~420 with fp32) (was 3.4 tok/s in the first GPU version). The server handles one request at a time. A **scheduler with batched decode** is the next step, then a paged KV cache.
+Status: GPT-2 small on one RTX 3060 generates **~765 tokens/s** in the server (fp16 weights; ~485 with fp32) (was 3.4 tok/s in the first GPU version). The server handles one request at a time. A **scheduler with batched decode** is the next step, then a paged KV cache.
 
 Intermediate Goal: Learn to use nsys and ncu proerly and learn which optimizations work.
 
@@ -23,6 +23,7 @@ GPT-2 Small, RTX 3060, 32-token prompt, greedy decoding, 16 decode tokens, one s
 | + layernorm: one block per row | 16.3 ms | 323.1 tok/s | [005](docs/005_layernorm.md) |
 | + fp16 weights in the decode matrix products (opt-in) | 16.3 ms (unchanged) | 422.2 tok/s | [006](docs/006_fp16_weights.md) |
 | + fewer launches per decode step (219 → 87): bias, gelu, residual fused into the matrix-vector kernel | 16.3 ms (unchanged) | 335.0 tok/s (fp32), **459.2 tok/s** (fp16) | [007](docs/007_fewer_launches.md) |
+| + the next token is chosen on the GPU and the next step is queued before the host reads it | 16.3 ms (unchanged) | 352.4 tok/s (fp32), **470.9 tok/s** (fp16) | [008](docs/008_gpu_cpu_token_loop.md) |
 
 - Since the first GPU version: prefill (32 tokens) is **10.7x** faster (174 → 16.3 ms) and decode is **95x** faster in fp32 (3.4 → 323 tok/s) and **124x** with fp16 weights (422 tok/s). Most of the decode gain is the KV cache (every step used to run the whole sequence again) and the matrix-vector kernel.
 - Attention kernel: 16.9 ms → 0.81 ms (**21x**), found with Nsight Compute (one loop did the same dot product 64 times).
@@ -49,7 +50,8 @@ At a glance, 20 concurrent users, 128 new tokens per request. Each row is one re
 | + matrix-vector kernel | 237.2 | 82.6 ms | 10.8 s | [004](docs/004_gemv.md) |
 | + layernorm, one block per row | 370.0 | 52.6 ms | 6.9 s | [005](docs/005_layernorm.md) |
 | + fp16 weights in decode (opt-in) | 445.4 | 43.7 ms | 5.7 s | [006](docs/006_fp16_weights.md) |
-| + fewer launches (fp32 weights: 422.4 tok/s, 45.6 ms, 6.1 s) | **627.3** | **29.9 ms** | **4.1 s** | [007](docs/007_fewer_launches.md) |
+| + fewer launches (fp32 weights: 422.4 tok/s, 45.6 ms, 6.1 s) | 627.3 | 29.9 ms | 4.1 s | [007](docs/007_fewer_launches.md) |
+| + token chosen on the GPU, lock-free wait (fp32 weights: 485 tok/s, 39.6 ms, 5.2 s) | **763** | **24.5 ms** | **3.3 s** | [008](docs/008_gpu_cpu_token_loop.md) |
 
 Throughput is flat from 1 to 20 users in every row, because the requests wait for each other. The latency grows with the number of users instead. This is what batching has to change.
 
@@ -137,7 +139,7 @@ After report 004, layernorm was 44% of a decode step. The kernel used one thread
 - One decode step: 3.87 ms → 2.29 ms of kernel time. Layernorm: 1.709 ms → 0.070 ms.
 - Prefill (32 tokens) also gains: 21.8 ms → 16.3 ms. Layernorm was 20% of that pass.
 - Since the KV cache (report 003), server throughput at 20 users went 90.9 → 237 → 370 tok/s.
-- The server now needs about 0.4 ms per token outside the GPU kernels (15% of a token). Batching the decode of several requests is the next step for throughput.
+- Batching the decode of several requests is the next step for throughput.
 
 ### With fp16 weights in decode ([report 006](docs/006_fp16_weights.md))
 
@@ -179,6 +181,27 @@ With fp32 weights: 369 → 422 tok/s at 20 users (1.14x).
 - The server gained more than the kernel time suggests (1.40x against 1.22x). The time outside the kernels fell from 0.68 to 0.31 ms per token; I did not prove why.
 - A first version of the fused kernel was slower than the old kernels (a 96-byte stack frame from indexing the kernel arguments). The report describes the fix.
 - Compute-sanitizer memcheck and racecheck report no errors on the 60 kernel tests.
+
+### With the token chosen on the GPU ([report 008](docs/008_gpu_cpu_token_loop.md))
+
+After report 007 the GPU was idle between two decode steps: it waited while the host copied the 50257 logits (200 KB) back, took the argmax, and launched the next step (8% of the step in the C benchmark, 12% in the server). Two changes: the **argmax runs on the GPU** (only the 4-byte token is copied back), and the **next step is queued before the host reads the previous token**, so the Python work (tokenizer, JSON, thread hop) runs while the GPU computes. The logits path is bit-for-bit unchanged and the chosen tokens are identical (tested). fp16 weights, 128 new tokens per request, two runs per configuration (mean):
+
+| | before | GPU argmax only | + queued one step ahead |
+|---|---|---|---|
+| 1 user, tok/s | 516 | 544 | **728** |
+| 1 user, end-to-end p50 | 0.245 s | 0.235 s | **0.175 s** |
+| 20 users, tok/s | 629 | **765** | **763** |
+| 20 users, inter-token p50 | 29.9 ms | 24.1 ms | 24.5 ms |
+
+With fp32 weights: 20 users 421 → 485 tok/s, 1 user 371 → 477.
+
+![Token loop, 128 tokens](docs/images/008_token_loop_128.png)
+
+- Idle time between two steps in the C benchmark: 0.127 ms → 0.034 ms (GPU argmax) → 0.008 ms (queued). Real server, one stream: 0.183 ms → 0.014 ms.
+- With 100 µs of host work per token, the C benchmark loses 0.10 ms per token without the lookahead and **0.002 ms** with it.
+- **I predicted the wrong cause for the 20-user gain.** The old `decode()` held the engine lock while it waited for the logits, so no other session could queue kernels: in the nsys run of 20 users the kernels ran only 45% of the time and 99% of the idle time was the GPU waiting for a launch. Waiting on a CUDA event without the lock fixed that (86% busy). A control run that waits while holding the lock gives 597 tok/s again. At 20 users the lookahead itself adds nothing; for a single stream it adds 34%.
+- Not understood yet: the nsys gap for the server with stage A only got larger (0.18 → 0.32 ms) although tok/s went up; TTFT p50 at 20 users is 0.06 s with stage A and 0.17 s with the lookahead. Both are listed in the report.
+- Next: a scheduler with batched decode.
 
 ## Run
 

@@ -34,11 +34,18 @@ MAX_CONTEXT = 1024
 
 
 class Session(Protocol):
-    """One generation. prefill() reads the prompt, decode() adds one token."""
+    """One greedy generation. The engine chooses the tokens.
 
-    def prefill(self, token_ids: np.ndarray) -> np.ndarray: ...
+    start() queues the prompt, enqueue() queues one more step for the newest token and take()
+    returns the oldest token that was not taken. enqueue() may run before take(), so the
+    engine can work on the next token while the caller handles the last one.
+    """
 
-    def decode(self, token_id: int) -> np.ndarray: ...
+    def start(self, token_ids: np.ndarray) -> None: ...
+
+    def enqueue(self) -> None: ...
+
+    def take(self) -> int: ...
 
     def close(self) -> None: ...
 
@@ -64,10 +71,14 @@ class InferenceService:
         engine: InferenceEngine,
         tokenizer: Tokenizer,
         model_name: str = "gpt2-small-native-cpu",
+        lookahead: bool = True,
     ) -> None:
         self.engine = engine
         self.tokenizer = tokenizer
         self.model_name = model_name
+        # Queue the step for token k+1 before token k is read, so the GPU does not wait
+        # for the Python work between two tokens (docs/008_gpu_cpu_token_loop.md).
+        self.lookahead = lookahead
 
     def _prepare(self, prompt: str, max_new_tokens: int | None) -> list[int]:
         if not prompt.strip():
@@ -107,13 +118,23 @@ class InferenceService:
 
         # The session is closed when the generator ends or is closed (the client left).
         # That gives its KV cache back.
+        # No more tokens than the limit, and no more than fit into the context.
+        # A step is only queued if its token will be used.
+        limit = MAX_CONTEXT - prompt_token_count
+        if max_new_tokens is not None:
+            limit = min(limit, max_new_tokens)
+        queued = 1  # the prompt gives the first token
+
         with contextlib.closing(self.engine.open_session()) as session:
             # The first call reads the whole prompt, the next calls add one token each.
             # Opening the session may wait for a free KV cache, and that wait counts
             # towards the time to first token.
-            logits = session.prefill(np.asarray(tokens, dtype=np.int32))
+            session.start(np.asarray(tokens, dtype=np.int32))
             while max_new_tokens is None or len(generated) < max_new_tokens:
-                next_token = int(np.argmax(logits))
+                if self.lookahead and queued < limit:
+                    session.enqueue()
+                    queued += 1
+                next_token = session.take()
                 now = time.perf_counter() - started
                 generated.append(next_token)
                 token_times.append(now)
@@ -135,8 +156,10 @@ class InferenceService:
                     finish_reason = "context"
                     break
                 if max_new_tokens is not None and len(generated) >= max_new_tokens:
-                    break  # the loop ends. Do not compute logits that nobody reads
-                logits = session.decode(next_token)
+                    break
+                if not self.lookahead:
+                    session.enqueue()
+                    queued += 1
 
         completion = self.tokenizer.decode(generated, skip_special_tokens=True)
         total = time.perf_counter() - started
@@ -276,6 +299,12 @@ def parse_args() -> argparse.Namespace:
         "slightly different logits. The prompt still uses fp32",
     )
     parser.add_argument(
+        "--no-lookahead",
+        action="store_true",
+        help="Read each token before the next step is queued (the GPU waits for Python "
+        "between two tokens). For measuring only",
+    )
+    parser.add_argument(
         "--max-sessions",
         type=int,
         default=32,
@@ -310,7 +339,10 @@ def main() -> None:
     suffix = "-kvcache" if engine.use_kv_cache else ""
     suffix += "-fp16" if engine.fp16_decode else ""
     service = InferenceService(
-        engine, tokenizer, f"gpt2-small-native-{args.backend}{suffix}"
+        engine,
+        tokenizer,
+        f"gpt2-small-native-{args.backend}{suffix}",
+        lookahead=not args.no_lookahead,
     )
     try:
         uvicorn.run(create_app(service), host=args.host, port=args.port)

@@ -137,6 +137,49 @@ static Stats measure_prefill(const Backend *backend, const Options *options, con
     return stats;
 }
 
+static void spin_us(int microseconds) {
+    double end = now_ms() + microseconds / 1000.0;
+    while (now_ms() < end) {
+    }
+}
+
+// One generated token. The three modes differ in how the host gets it (DecodeMode).
+// Returns the new token. `step` 0 reads the prompt. `more` is 1 if another token follows.
+static int next_token(const Backend *backend,
+                      const Options *options,
+                      GPT2GpuKvCache *cache,
+                      const int *sequence,
+                      size_t length,
+                      size_t step,
+                      int more,
+                      float *logits) {
+    GPT2GpuModel *model = backend->gpu_model;
+    int token = 0;
+    if (options->decode_mode == DECODE_QUEUED) {
+        if (step == 0) {
+            gpt2_gpu_prefill_enqueue(model, cache, sequence, length);
+        }
+        if (more) {
+            gpt2_gpu_decode_enqueue(model, cache); // queued before the token is read
+        }
+        gpt2_gpu_token_wait(cache, &token);
+    } else if (options->decode_mode == DECODE_GREEDY) {
+        if (step == 0) {
+            gpt2_gpu_prefill_greedy(model, cache, sequence, length, &token);
+        } else {
+            gpt2_gpu_decode_greedy(model, cache, sequence[length - 1], &token);
+        }
+    } else {
+        if (step == 0) {
+            gpt2_gpu_prefill(model, cache, sequence, length, logits);
+        } else {
+            gpt2_gpu_decode(model, cache, sequence[length - 1], logits, NULL);
+        }
+        token = argmax(logits, GPT2_N_VOCAB);
+    }
+    return token;
+}
+
 // Greedy generation. Returns the total time in ms and the time of the first and last step.
 static double measure_decode(const Backend *backend,
                              const Options *options,
@@ -160,13 +203,15 @@ static double measure_decode(const Backend *backend,
         double start = now_ms();
         if (cache == NULL) {
             run_forward(backend, sequence, length, logits, NULL);
-        } else if (step == 0) {
-            // The first token needs the whole prompt, so step 0 includes the prefill.
-            gpt2_gpu_prefill(backend->gpu_model, cache, sequence, length, logits);
+            sequence[length++] = argmax(logits, GPT2_N_VOCAB);
         } else {
-            gpt2_gpu_decode(backend->gpu_model, cache, sequence[length - 1], logits, NULL);
+            // The first token needs the whole prompt, so step 0 includes the prefill.
+            int more = step + 1 < options->decode_tokens;
+            sequence[length] =
+                next_token(backend, options, cache, sequence, length, step, more, logits);
+            length++;
         }
-        sequence[length++] = argmax(logits, GPT2_N_VOCAB);
+        spin_us(options->host_work_us);
         double elapsed = now_ms() - start;
         *first_step_ms = step == 0 ? elapsed : *first_step_ms;
         *last_step_ms = elapsed;
@@ -236,10 +281,12 @@ static void print_context(const Options *options) {
                info.compute_major, info.compute_minor, info.multiprocessors,
                info.memory_bytes / 1e9, info.runtime_version, info.driver_version);
     }
+    static const char *const MODE_NAMES[] = {"logits", "greedy", "queued"};
     printf("workload   prompt=%zu tokens, decode=%zu tokens, warmup=%d, runs=%d, kv cache=%s, "
-           "fp16 weights=%s\n",
+           "fp16 weights=%s, decode mode=%s, host work=%d us\n",
            options->prompt_tokens, options->decode_tokens, options->warmup, options->runs,
-           options->kv_cache ? "on" : "off", options->fp16_weights ? "on" : "off");
+           options->kv_cache ? "on" : "off", options->fp16_weights ? "on" : "off",
+           MODE_NAMES[options->decode_mode], options->host_work_us);
 }
 
 static void write_json(const Options *options,
@@ -261,6 +308,11 @@ static void write_json(const Options *options,
     }
     fprintf(file, "  \"kv_cache\": %s,\n  \"fp16_weights\": %s,\n",
             options->kv_cache ? "true" : "false", options->fp16_weights ? "true" : "false");
+    fprintf(file, "  \"decode_mode\": \"%s\",\n  \"host_work_us\": %d,\n",
+            options->decode_mode == DECODE_LOGITS   ? "logits"
+            : options->decode_mode == DECODE_GREEDY ? "greedy"
+                                                    : "queued",
+            options->host_work_us);
     fprintf(file, "  \"prompt_tokens\": %zu,\n  \"decode_tokens\": %zu,\n  \"runs\": %d,\n",
             options->prompt_tokens, options->decode_tokens, options->runs);
     fprintf(file, "  \"prefill_ms\": {\"median\": %.4f, \"min\": %.4f, \"mean\": %.4f},\n",

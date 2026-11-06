@@ -8,8 +8,23 @@
 
 #define DEFAULT_WEIGHTS "engine/tests/reference_data/weights"
 
+static int parse_decode_mode(const char *text, DecodeMode *mode) {
+    if (strcmp(text, "logits") == 0) {
+        *mode = DECODE_LOGITS;
+    } else if (strcmp(text, "greedy") == 0) {
+        *mode = DECODE_GREEDY;
+    } else if (strcmp(text, "queued") == 0) {
+        *mode = DECODE_QUEUED;
+    } else {
+        fprintf(stderr, "--decode-mode is logits, greedy or queued\n");
+        return 0;
+    }
+    return 1;
+}
+
 int parse_options(int argc, char **argv, Options *options) {
-    Options defaults = {"gpu", DEFAULT_WEIGHTS, NULL, 32, 16, 2, 5, 1, 0, 0, 0, 0};
+    Options defaults = {"gpu", DEFAULT_WEIGHTS, NULL, 32, 16, 2, 5, 1, 0, 0, 0,
+                        0,     DECODE_LOGITS,   0};
     *options = defaults;
     for (int index = 1; index < argc; index++) {
         const char *name = argv[index];
@@ -37,6 +52,12 @@ int parse_options(int argc, char **argv, Options *options) {
             options->prompt_tokens = (size_t)atol(argv[++index]);
         } else if (strcmp(name, "--decode-tokens") == 0) {
             options->decode_tokens = (size_t)atol(argv[++index]);
+        } else if (strcmp(name, "--decode-mode") == 0) {
+            if (!parse_decode_mode(argv[++index], &options->decode_mode)) {
+                return 0;
+            }
+        } else if (strcmp(name, "--host-work-us") == 0) {
+            options->host_work_us = atoi(argv[++index]);
         } else if (strcmp(name, "--warmup") == 0) {
             options->warmup = atoi(argv[++index]);
         } else if (strcmp(name, "--runs") == 0) {
@@ -52,6 +73,14 @@ int parse_options(int argc, char **argv, Options *options) {
     }
     if (options->fp16_weights && !options->kv_cache) {
         fprintf(stderr, "--fp16-weights is used in decode: add --kv-cache\n");
+        return 0;
+    }
+    if (options->decode_mode != DECODE_LOGITS && !options->kv_cache) {
+        fprintf(stderr, "--decode-mode greedy and queued need --kv-cache\n");
+        return 0;
+    }
+    if (options->host_work_us < 0) {
+        fprintf(stderr, "--host-work-us must not be negative\n");
         return 0;
     }
     int backend_ok = strcmp(options->backend, "gpu") == 0 || strcmp(options->backend, "cpu") == 0;

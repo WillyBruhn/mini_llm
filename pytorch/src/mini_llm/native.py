@@ -3,6 +3,7 @@
 import ctypes
 import os
 import threading
+from collections import deque
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
@@ -41,6 +42,8 @@ class RecomputeSession:
     def __init__(self, engine: "NativeGPT2") -> None:
         self._engine = engine
         self._tokens: list[int] = []
+        self._pending: deque[int] = deque()
+        self._newest: int | None = None
 
     def prefill(self, token_ids: np.ndarray) -> np.ndarray:
         self._tokens = [int(token) for token in token_ids]
@@ -50,8 +53,28 @@ class RecomputeSession:
         self._tokens.append(token_id)
         return self._engine.forward_last(np.asarray(self._tokens, dtype=np.int32))
 
+    # The same start / enqueue / take as CachedSession. Nothing runs ahead here: the work is
+    # done at once and take() only hands the result over.
+    def start(self, token_ids: np.ndarray) -> None:
+        self._pending.clear()
+        self._newest = int(np.argmax(self.prefill(token_ids)))
+        self._pending.append(self._newest)
+
+    def enqueue(self) -> None:
+        if self._newest is None:
+            raise RuntimeError("enqueue needs a started session")
+        self._newest = int(np.argmax(self.decode(self._newest)))
+        self._pending.append(self._newest)
+
+    def take(self) -> int:
+        if not self._pending:
+            raise RuntimeError("no token is queued")
+        return self._pending.popleft()
+
     def close(self) -> None:
         self._tokens = []
+        self._pending.clear()
+        self._newest = None
 
     def __enter__(self) -> "RecomputeSession":
         return self
@@ -96,6 +119,38 @@ class CachedSession:
         if not success:
             raise RuntimeError("Native GPT-2 decode failed")
         return logits
+
+    # Greedy generation with the token chosen on the GPU (see docs/008_gpu_cpu_token_loop.md).
+    # start() queues the prompt, enqueue() queues one more step for the newest token, and take()
+    # waits for the oldest token that was not taken. enqueue() may be called before take(), so
+    # that the GPU works on the next token while the host handles the last one.
+    def start(self, token_ids: np.ndarray) -> None:
+        tokens = np.ascontiguousarray(token_ids, dtype=np.int32)
+        if tokens.ndim != 1 or tokens.size == 0:
+            raise ValueError("token_ids must be a non-empty one-dimensional array")
+        engine = self._active()
+        with engine.guard:
+            success = engine.library.gpt2_gpu_prefill_enqueue(
+                engine.model, self._cache, tokens, tokens.size
+            )
+        if not success:
+            raise RuntimeError("Native GPT-2 prefill failed")
+
+    def enqueue(self) -> None:
+        engine = self._active()
+        with engine.guard:
+            success = engine.library.gpt2_gpu_decode_enqueue(engine.model, self._cache)
+        if not success:
+            raise RuntimeError("Native GPT-2 decode failed")
+
+    def take(self) -> int:
+        engine = self._active()
+        token = ctypes.c_int()
+        # No lock: this only waits for an event of this cache, and other sessions can queue
+        # their steps meanwhile. ctypes lets go of the GIL during the call.
+        if not engine.library.gpt2_gpu_token_wait(self._cache, ctypes.byref(token)):
+            raise RuntimeError("no token is queued")
+        return token.value
 
     def close(self) -> None:
         engine, self._engine = self._engine, None
@@ -229,6 +284,24 @@ class NativeGPT2:
                 ctypes.c_void_p,
             ]
             library.gpt2_gpu_decode.restype = ctypes.c_int
+            # model, cache, tokens, count
+            library.gpt2_gpu_prefill_enqueue.argtypes = [
+                ctypes.c_void_p,
+                ctypes.c_void_p,
+                _TOKEN_ARRAY,
+                ctypes.c_size_t,
+            ]
+            library.gpt2_gpu_prefill_enqueue.restype = ctypes.c_int
+            library.gpt2_gpu_decode_enqueue.argtypes = [
+                ctypes.c_void_p,
+                ctypes.c_void_p,
+            ]
+            library.gpt2_gpu_decode_enqueue.restype = ctypes.c_int
+            library.gpt2_gpu_token_wait.argtypes = [
+                ctypes.c_void_p,
+                ctypes.POINTER(ctypes.c_int),
+            ]
+            library.gpt2_gpu_token_wait.restype = ctypes.c_int
 
     def forward_last(self, token_ids: np.ndarray) -> np.ndarray:
         tokens = np.ascontiguousarray(token_ids, dtype=np.int32)

@@ -14,7 +14,7 @@ CUDA_SANITIZER ?= /usr/local/cuda-12.6
 # Source files
 CPU_SRCS = $(wildcard engine/src/*.c)
 CPU_OBJS = $(patsubst engine/src/%.c,$(BUILD)/%.o,$(CPU_SRCS))
-GPT2_GPU_TEST_SRCS = engine/tests/test_gpt2_gpu.c engine/tests/test_gpt2_gpu_half.c
+GPT2_GPU_TEST_SRCS = engine/tests/test_gpt2_gpu.c engine/tests/test_gpt2_gpu_half.c engine/tests/test_gpt2_gpu_greedy.c
 TEST_SRCS = $(filter-out engine/tests/test_gpt2.c $(GPT2_GPU_TEST_SRCS),$(wildcard engine/tests/test_*.c))
 CUDA_SRCS = $(wildcard engine/src/*.cu)
 GPU_TEST_SRCS = $(wildcard engine/tests/test_*.cu)

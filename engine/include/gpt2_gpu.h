@@ -89,6 +89,58 @@ size_t gpt2_gpu_model_fp16_bytes(const GPT2GpuModel *model);
 int gpt2_gpu_decode(
     GPT2GpuModel *model, GPT2GpuKvCache *cache, int token, float *logits, GpuTimer *timer);
 
+// --- Greedy generation: the next token is chosen on the GPU ---
+//
+// gpt2_gpu_decode copies 50257 logits (200 KB) to the host so that the caller can pick the
+// largest. These functions pick it on the GPU (argmax with the rules of numpy.argmax: first
+// index on ties, NaN wins) and give back only the token. The GPU model and cache are changed
+// in the same way as by gpt2_gpu_prefill and gpt2_gpu_decode, so both ways can be mixed on
+// different caches.
+
+// Like gpt2_gpu_prefill, but returns the most likely next token instead of the logits.
+// Returns 1 on success and 0 for invalid input (cache unchanged).
+int gpt2_gpu_prefill_greedy(GPT2GpuModel *model,
+                            GPT2GpuKvCache *cache,
+                            const int *tokens,
+                            size_t sequence_length,
+                            int *next_token);
+
+// Like gpt2_gpu_decode, but returns the most likely next token. Tokens that were queued on the
+// cache and not read are dropped. Returns 1 on success and 0 for invalid input (cache unchanged).
+int gpt2_gpu_decode_greedy(GPT2GpuModel *model, GPT2GpuKvCache *cache, int token, int *next_token);
+
+// --- One step ahead: the token stays on the GPU between two steps ---
+//
+// The *_enqueue functions return as soon as the work is queued on the GPU. The chosen token is
+// kept in GPU memory, and the next decode step reads it from there. The host can therefore
+// queue step n+1 before it knows the token of step n, and the GPU does not wait for the host.
+// gpt2_gpu_token_wait gives the tokens back in the order of the steps.
+
+// At most this many steps can be queued on one cache before the host has read a token.
+#define GPT2_GPU_MAX_QUEUED_TOKENS 4
+
+// Queues the prefill of the prompt and the choice of the first token. Replaces any earlier
+// content of the cache and drops tokens that were still queued.
+// Returns 1 on success and 0 for invalid input (cache unchanged, queue unchanged).
+int gpt2_gpu_prefill_enqueue(GPT2GpuModel *model,
+                             GPT2GpuKvCache *cache,
+                             const int *tokens,
+                             size_t sequence_length);
+
+// Queues one decode step for the newest token on the GPU (the one the last enqueue chose),
+// and the choice of the token after it. The cache length grows by one at once.
+// Returns 0 (nothing changes) if no token is available on the GPU (before any prefill_enqueue,
+// or after a reset or a prefill without enqueue), if the cache is full, or if
+// GPT2_GPU_MAX_QUEUED_TOKENS tokens are waiting to be read.
+int gpt2_gpu_decode_enqueue(GPT2GpuModel *model, GPT2GpuKvCache *cache);
+
+// Waits for the oldest queued token and returns it. Returns 0 if nothing is queued.
+// Other threads may keep queueing work on the model while this one waits.
+int gpt2_gpu_token_wait(GPT2GpuKvCache *cache, int *token);
+
+// Number of queued tokens that were not read yet.
+size_t gpt2_gpu_tokens_queued(const GPT2GpuKvCache *cache);
+
 #ifdef __cplusplus
 }
 #endif

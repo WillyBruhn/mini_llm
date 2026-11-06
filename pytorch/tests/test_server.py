@@ -21,39 +21,52 @@ class FakeTokenizer:
 
 
 class FakeSession:
-    """Predicts token 2 after a one-token prompt and token 0 (EOS) after that."""
+    """Chooses the tokens of `script` one after another (the last one repeats).
 
-    def __init__(self) -> None:
+    It records the calls, because the order of enqueue and take is what the server must get right.
+    """
+
+    def __init__(self, script: list[int]) -> None:
+        self.script = script
         self.length = 0
         self.closed = False
-        self.prefill_calls = 0
-        self.decode_calls = 0
+        self.calls: list[str] = []
+        self.chosen = 0
+        self.queue: list[int] = []
+        self.max_queued = 0
 
-    def _logits(self) -> np.ndarray:
-        logits = np.zeros(5, dtype=np.float32)
-        logits[2 if self.length == 1 else 0] = 1.0
-        return logits
+    def _choose(self) -> None:
+        self.queue.append(self.script[min(self.chosen, len(self.script) - 1)])
+        self.chosen += 1
+        self.max_queued = max(self.max_queued, len(self.queue))
 
-    def prefill(self, token_ids: np.ndarray) -> np.ndarray:
-        self.prefill_calls += 1
+    def start(self, token_ids: np.ndarray) -> None:
+        self.calls.append("start")
         self.length = int(token_ids.size)
-        return self._logits()
+        self._choose()
 
-    def decode(self, token_id: int) -> np.ndarray:
-        self.decode_calls += 1
+    def enqueue(self) -> None:
+        self.calls.append("enqueue")
         self.length += 1
-        return self._logits()
+        self._choose()
+
+    def take(self) -> int:
+        self.calls.append("take")
+        return self.queue.pop(0)
 
     def close(self) -> None:
         self.closed = True
 
 
 class FakeEngine:
-    def __init__(self) -> None:
+    """Every session predicts the script. The default is token 2, then EOS (0)."""
+
+    def __init__(self, script: list[int] | None = None) -> None:
+        self.script = [2, 0] if script is None else script
         self.sessions: list[FakeSession] = []
 
     def open_session(self) -> FakeSession:
-        session = FakeSession()
+        session = FakeSession(self.script)
         self.sessions.append(session)
         return session
 
@@ -136,34 +149,8 @@ class SplitCharTokenizer(FakeTokenizer):
         return ""
 
 
-class ScriptedSession(FakeSession):
-    """Predicts the given token ids one after another."""
-
-    def __init__(self, script: list[int]) -> None:
-        super().__init__()
-        self.script = script
-        self.step = 0
-
-    def _logits(self) -> np.ndarray:
-        logits = np.zeros(5, dtype=np.float32)
-        logits[self.script[min(self.step, len(self.script) - 1)]] = 1.0
-        self.step += 1
-        return logits
-
-
-class ScriptedEngine:
-    def __init__(self, script: list[int]) -> None:
-        self.script = script
-        self.sessions: list[ScriptedSession] = []
-
-    def open_session(self) -> ScriptedSession:
-        session = ScriptedSession(self.script)
-        self.sessions.append(session)
-        return session
-
-
 def test_stream_holds_back_incomplete_characters() -> None:
-    service = InferenceService(ScriptedEngine([3, 4]), SplitCharTokenizer())
+    service = InferenceService(FakeEngine([3, 4]), SplitCharTokenizer())
     events = list(service.generate_stream("hi", 2))
     assert [e.token for e in events[:2] if isinstance(e, TokenEvent)] == ["", "é"]
     final = events[-1]
@@ -172,7 +159,7 @@ def test_stream_holds_back_incomplete_characters() -> None:
 
 
 def test_no_limit_runs_until_context_is_full() -> None:
-    service = InferenceService(ScriptedEngine([2]), FakeTokenizer())
+    service = InferenceService(FakeEngine([2]), FakeTokenizer())
     events = list(service.generate_stream("hello", None))
     final = events[-1]
     assert isinstance(final, DoneEvent)
@@ -181,21 +168,69 @@ def test_no_limit_runs_until_context_is_full() -> None:
 
 
 def test_limit_above_old_cap_is_accepted_and_reports_length() -> None:
-    service = InferenceService(ScriptedEngine([2]), FakeTokenizer())
+    service = InferenceService(FakeEngine([2]), FakeTokenizer())
     final = service.generate("hello", 100)
     assert final.generated_tokens == 100
     assert final.finish_reason == "length"
 
 
 def test_prompt_is_prefilled_once_and_every_other_token_is_decoded() -> None:
-    engine = ScriptedEngine([2])
+    engine = FakeEngine([2])
     final = InferenceService(engine, FakeTokenizer()).generate("hello", 5)
     assert final.generated_tokens == 5
     (session,) = engine.sessions
-    assert session.prefill_calls == 1
-    # The last generated token is not fed back, so 5 tokens need 4 decode steps.
-    assert session.decode_calls == 4
+    # The prompt is started once. The first token comes from it, so 5 tokens need 4 steps.
+    assert session.calls.count("start") == 1
+    assert session.calls.count("enqueue") == 4
+    assert session.calls.count("take") == 5
     assert session.closed
+
+
+def test_the_next_step_is_queued_before_the_current_token_is_read() -> None:
+    engine = FakeEngine([2])
+    InferenceService(engine, FakeTokenizer()).generate("hello", 4)
+    (session,) = engine.sessions
+    # The GPU already works on token k+1 while the host reads and handles token k.
+    assert session.calls == [
+        "start", "enqueue", "take", "enqueue", "take", "enqueue", "take", "take",
+    ]  # fmt: skip
+    assert session.max_queued == 2
+
+
+def test_without_lookahead_the_token_is_read_before_the_next_step_is_queued() -> None:
+    engine = FakeEngine([2])
+    service = InferenceService(engine, FakeTokenizer(), lookahead=False)
+    service.generate("hello", 3)
+    (session,) = engine.sessions
+    assert session.calls == ["start", "take", "enqueue", "take", "enqueue", "take"]
+    assert session.max_queued == 1
+
+
+def test_lookahead_queues_at_most_one_step_that_nobody_reads() -> None:
+    # EOS is the first token. The step after it is already queued when the host sees it.
+    engine = FakeEngine([0])
+    final = InferenceService(engine, FakeTokenizer()).generate("hello", 10)
+    assert final.finish_reason == "stop"
+    assert final.generated_tokens == 1
+    (session,) = engine.sessions
+    assert session.calls.count("enqueue") == 1
+    assert session.closed
+
+
+def test_lookahead_never_queues_beyond_the_token_limit_or_the_context() -> None:
+    for limit in (1, 2, 7):
+        engine = FakeEngine([2])
+        InferenceService(engine, FakeTokenizer()).generate("hello", limit)
+        assert engine.sessions[0].calls.count("enqueue") == limit - 1
+
+    engine = FakeEngine([2])
+    final = InferenceService(engine, FakeTokenizer()).generate("hello", None)
+    assert final.finish_reason == "context"
+    (session,) = engine.sessions
+    # The context holds MAX_CONTEXT positions. A step needs a free one.
+    assert session.length == MAX_CONTEXT - 1
+    assert session.calls.count("enqueue") == final.generated_tokens - 1
+    assert session.calls.count("take") == final.generated_tokens
 
 
 def test_session_is_closed_after_normal_completion_and_after_errors() -> None:
@@ -204,10 +239,10 @@ def test_session_is_closed_after_normal_completion_and_after_errors() -> None:
     assert engine.sessions[0].closed
 
     class Failing(FakeSession):
-        def decode(self, token_id: int) -> np.ndarray:
+        def enqueue(self) -> None:
             raise RuntimeError("boom")
 
-    failing = Failing()
+    failing = Failing([2])
     broken = type("Broken", (), {"open_session": lambda self: failing})()
     with pytest.raises(RuntimeError):
         InferenceService(broken, FakeTokenizer()).generate("hello", 5)
@@ -215,7 +250,7 @@ def test_session_is_closed_after_normal_completion_and_after_errors() -> None:
 
 
 def test_session_is_closed_when_the_client_leaves_early() -> None:
-    engine = ScriptedEngine([2])
+    engine = FakeEngine([2])
     events = InferenceService(engine, FakeTokenizer()).generate_stream("hello", None)
     next(events)
     assert not engine.sessions[0].closed
