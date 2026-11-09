@@ -271,7 +271,7 @@ fp32 weights:
 | 10 | 366.7 | 421.1 | 1.15x | 26.3 ms | 22.9 ms | 88 ms | 83 ms | 3.48 s | 3.03 s |
 | 20 | 369.1 | 422.4 | 1.14x | 52.8 ms | 45.6 ms | 149 ms | 156 ms | 6.91 s | 6.08 s |
 
-![Before and after, 128 tokens](images/007_fewer_launches_128.png)
+![Before and after, 128 tokens](../serving/images/007_fewer_launches_128.png)
 
 - The generated text for "The capital of France is" is the same as before, with both weight types.
 - With 16 new tokens per request, fp16: 387.6 / 469.2 / 473.2 / 488.4 tok/s at 1 / 5 / 10 / 20 users after the change. Report `006` measured 341.9 / 369.3 / 364.7 / 364.8 tok/s for the same workload before it (an earlier session, so the comparison is less strict than the 128-token one): +13% at one user and +34% at 20 users.

@@ -118,6 +118,27 @@ void transformer_block_decode_device(const float *d_input,
                                      GpuTimer *timer,
                                      int layer);
 
+// One block for `rows` sequences that each add ONE new token (batched decoding). d_input and
+// d_out are [rows, hidden_size] and must be different buffers; the scratch buffers need `rows`
+// rows. d_cache_k[r] and d_cache_v[r] (arrays in GPU memory) are the cache buffers of this layer
+// for sequence r, d_lengths[r] its length including the new token, and max_length the largest
+// length. The new K and V are stored in row d_lengths[r] - 1. half_weights may be NULL.
+// Row r gives the bits of transformer_block_decode_device on that sequence alone.
+void transformer_block_decode_batch_device(const float *d_input,
+                                           float *d_out,
+                                           const TransformerBlockWeights *d_weights,
+                                           const TransformerBlockHalfWeights *half_weights,
+                                           const TransformerBlockScratch *scratch,
+                                           float *const *d_cache_k,
+                                           float *const *d_cache_v,
+                                           const int *d_lengths,
+                                           size_t rows,
+                                           size_t max_length,
+                                           size_t hidden_size,
+                                           size_t n_heads,
+                                           size_t mlp_size,
+                                           float epsilon);
+
 // Copies everything to the GPU, runs one block, and copies the result back.
 void transformer_block_gpu(const float *input,
                            float *out,

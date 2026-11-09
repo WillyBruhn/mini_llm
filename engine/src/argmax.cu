@@ -19,7 +19,10 @@ __device__ bool beats(float value, int index, float best, int best_index) {
 
 // One block. Every thread scans the values index, index + 1024, ... and keeps the best one. The
 // warps then combine their results with shuffles, and warp 0 combines the warps.
-__global__ void argmax_kernel(const float *values, size_t n, int *result) {
+__global__ void argmax_kernel(const float *all_values, size_t n, int *results) {
+    // Block r works on row r. A single call is one block, so row 0.
+    const float *values = all_values + blockIdx.x * n;
+    int *result = results + blockIdx.x;
     __shared__ float warp_value[ARGMAX_WARPS];
     __shared__ int warp_index[ARGMAX_WARPS];
 
@@ -61,5 +64,10 @@ __global__ void argmax_kernel(const float *values, size_t n, int *result) {
 
 void argmax_device(const float *d_values, size_t n, int *d_result) {
     argmax_kernel<<<1, ARGMAX_THREADS>>>(d_values, n, d_result);
+    CUDA_CHECK_LAUNCH();
+}
+
+void argmax_rows_device(const float *d_values, size_t rows, size_t n, int *d_result) {
+    argmax_kernel<<<(unsigned)rows, ARGMAX_THREADS>>>(d_values, n, d_result);
     CUDA_CHECK_LAUNCH();
 }

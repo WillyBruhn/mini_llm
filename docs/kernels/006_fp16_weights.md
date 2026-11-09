@@ -241,7 +241,7 @@ Server (`scripts/benchmark_throughput.py`, KV cache, new layernorm in both). Bot
 | 10 | 316.3 | 364.7 | 1.15x | 26.0 ms | 21.5 ms | 69 ms | 65 ms | 0.49 s | 0.42 s |
 | 20 | 318.0 | 364.8 | 1.15x | 51.7 ms | 43.9 ms | 135 ms | 120 ms | 0.98 s | 0.86 s |
 
-![fp32 against fp16 weights, 128 tokens](images/006_fp16_128.png)
+![fp32 against fp16 weights, 128 tokens](../serving/images/006_fp16_128.png)
 
 - **The kernel gain is 1.46x and the server gain is 1.19x–1.28x.** Per token the server needs 2.68 ms with fp32 and 2.25 ms with fp16 (at 20 users). The kernel time of the step is 2.30 and 1.57 ms. The time **outside the kernels** is therefore 0.38 ms (14% of a token) in fp32 and **0.68 ms (30% of a token)** in fp16. That is a measured difference. The cause is something I did not find: it is not the same 0.4 ms as before, which would give 1.95 ms per token and 513 tok/s.
 - The text is the same as before for the two test prompts: ` the capital of the French Republic, and the capital of the French Republic` and `, the world was a place of great beauty and great danger. The`.

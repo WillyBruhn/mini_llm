@@ -14,7 +14,7 @@ CUDA_SANITIZER ?= /usr/local/cuda-12.6
 # Source files
 CPU_SRCS = $(wildcard engine/src/*.c)
 CPU_OBJS = $(patsubst engine/src/%.c,$(BUILD)/%.o,$(CPU_SRCS))
-GPT2_GPU_TEST_SRCS = engine/tests/test_gpt2_gpu.c engine/tests/test_gpt2_gpu_half.c engine/tests/test_gpt2_gpu_greedy.c
+GPT2_GPU_TEST_SRCS = engine/tests/test_gpt2_gpu.c engine/tests/test_gpt2_gpu_half.c engine/tests/test_gpt2_gpu_greedy.c engine/tests/test_gpt2_gpu_batch.c
 TEST_SRCS = $(filter-out engine/tests/test_gpt2.c $(GPT2_GPU_TEST_SRCS),$(wildcard engine/tests/test_*.c))
 CUDA_SRCS = $(wildcard engine/src/*.cu)
 GPU_TEST_SRCS = $(wildcard engine/tests/test_*.cu)
@@ -92,6 +92,17 @@ $(BUILD)/bench_options.o: engine/bench/bench_options.c engine/bench/bench_option
 $(BUILD)/bench: $(BUILD)/bench.o $(BUILD)/bench_options.o $(NVLINK_DEPS) | $(BUILD)
 	$(NVCC) $(NVFLAGS) -o $@ $(BUILD)/bench.o $(BUILD)/bench_options.o $(CUDA_SRCS) $(filter-out $(BUILD)/main.o,$(CPU_OBJS)) $(LDFLAGS)
 
+$(BUILD)/bench_batch.o: engine/bench/bench_batch.c $(wildcard engine/include/*.h) | $(BUILD)
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/bench_batch: $(BUILD)/bench_batch.o $(NVLINK_DEPS) | $(BUILD)
+	$(NVCC) $(NVFLAGS) -o $@ $(BUILD)/bench_batch.o $(CUDA_SRCS) $(filter-out $(BUILD)/main.o,$(CPU_OBJS)) $(LDFLAGS)
+
+# Batched decode, engine only. Example: make bench-batch GPU=2 BATCH_ARGS="--batch 16 --fp16-weights"
+BATCH_ARGS ?=
+bench-batch: $(BUILD)/bench_batch
+	CUDA_VISIBLE_DEVICES=$(GPU) ./$< $(BATCH_ARGS)
+
 bench-gpu: $(BUILD)/bench
 	CUDA_VISIBLE_DEVICES=$(GPU) ./$< --backend gpu $(BENCH_ARGS)
 
@@ -164,6 +175,10 @@ serve: inference-lib
 serve-gpu: gpu-lib
 	CUDA_VISIBLE_DEVICES=$(GPU) uv run scripts/serve.py --backend gpu $(SERVE_ARGS)
 
+# The scheduler server: continuous batching. Example: make serve-batched SERVE_ARGS="--fp16-weights"
+serve-batched: gpu-lib
+	CUDA_VISIBLE_DEVICES=$(GPU) uv run scripts/serve_batched.py $(SERVE_ARGS)
+
 $(BUILD)/libmini_llm.so: engine/src/vector_addition.c engine/include/vector_addition.h | $(BUILD)
 	$(CC) -Wall -Wextra -O2 -std=c11 -fPIC -shared -Iengine/include -o $@ engine/src/vector_addition.c
 
@@ -217,4 +232,4 @@ $(BUILD):
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: gpu-lib serve serve-gpu all test gpt2-test sanitize-cpu test-gpu gpt2-gpu-test sanitize-gpu bench-gpu bench-cpu profile-nsys profile-nsys-decode profile-ncu pytorch-test inference-lib reference weights run clean check format ruff-format-check ruff-check mypy clang-format-check file-length semgrep semgrep-test
+.PHONY: serve-batched bench-batch gpu-lib serve serve-gpu all test gpt2-test sanitize-cpu test-gpu gpt2-gpu-test sanitize-gpu bench-gpu bench-cpu profile-nsys profile-nsys-decode profile-ncu pytorch-test inference-lib reference weights run clean check format ruff-format-check ruff-check mypy clang-format-check file-length semgrep semgrep-test

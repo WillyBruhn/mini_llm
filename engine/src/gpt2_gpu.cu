@@ -109,6 +109,7 @@ void gpt2_gpu_model_free(GPT2GpuModel *model) {
     CUDA_CHECK(cudaFree(model->final_norm));
     CUDA_CHECK(cudaFree(model->logits));
     CUDA_CHECK(cudaFree(model->next_token));
+    gpt2_gpu_batch_buffers_free(model);
     free(model);
 }
 

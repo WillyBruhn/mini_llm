@@ -83,6 +83,24 @@ void matvec_fused_device(const float *d_x,
 // How many times matvec_device ran in this process. Lets tests check which kernel was used.
 unsigned long matvec_launch_count(void);
 
+// Most rows (sequences) of one batched product.
+enum { MATVEC_MAX_ROWS = 16 };
+
+// The same products for `rows` input rows at once: out[r, n] = x[r, k] * b[k, n], then the
+// epilogue, for r < rows. x and out are row-major [rows, k] and [rows, n]; residual (when the
+// epilogue reads it) is [rows, n]; bias is [n]. A thread loads a weight once and uses it for
+// all rows, so the weights are read once for the whole batch.
+// The sum of every row is accumulated in the same order as matvec_fused_device, so the row r of
+// the result is bit-identical to running that row alone, and does not depend on the other rows.
+// rows is 1 to MATVEC_MAX_ROWS, k at most MATVEC_MAX_K. Launches ONE kernel.
+void matvec_batch_device(const float *d_x,
+                         const MatvecProduct *products,
+                         int count,
+                         MatvecEpilogue epilogue,
+                         size_t rows,
+                         size_t k,
+                         size_t n);
+
 #ifdef __cplusplus
 }
 #endif

@@ -149,13 +149,15 @@ __device__ float block_reduce(float value, float *scratch, int op) {
 //   2. block-wide max, then exp(score - max) and the block-wide sum
 //   3. the threads split the output dimensions: out[d] = sum_k weight[k] * v[k][d]
 // The scores sit in dynamic shared memory: cached_rows floats.
-__global__ void decode_attention_kernel(const float *query,
-                                        const float *cached_key,
-                                        const float *cached_value,
-                                        float *out,
-                                        size_t cached_rows,
-                                        size_t n_heads,
-                                        size_t head_size) {
+// The work of one block (one head of one sequence). Used by the single and the batched kernel,
+// so that both add in the same order.
+static __device__ void decode_attention_head(const float *query,
+                                             const float *cached_key,
+                                             const float *cached_value,
+                                             float *out,
+                                             size_t cached_rows,
+                                             size_t n_heads,
+                                             size_t head_size) {
     extern __shared__ float scores[];
     __shared__ float reduction[DECODE_THREADS];
 
@@ -194,6 +196,41 @@ __global__ void decode_attention_kernel(const float *query,
         }
         out[head * head_size + dimension] = sum / total;
     }
+}
+
+__global__ void decode_attention_kernel(const float *query,
+                                        const float *cached_key,
+                                        const float *cached_value,
+                                        float *out,
+                                        size_t cached_rows,
+                                        size_t n_heads,
+                                        size_t head_size) {
+    decode_attention_head(query, cached_key, cached_value, out, cached_rows, n_heads, head_size);
+}
+
+// Grid (heads, rows). Block (h, r) first stores head h of the new K and V of sequence r in its
+// cache, then attends over lengths[r] rows. The block that writes a row is the only one that
+// reads that head's slice of it, so no grid-wide synchronization is needed.
+__global__ void decode_attention_batch_kernel(const float *query,
+                                              const float *new_k,
+                                              const float *new_v,
+                                              float *const *cache_k,
+                                              float *const *cache_v,
+                                              const int *lengths,
+                                              float *out,
+                                              size_t n_heads,
+                                              size_t head_size) {
+    size_t hidden_size = n_heads * head_size;
+    size_t row = blockIdx.y;
+    size_t length = (size_t)lengths[row];
+    size_t offset = (length - 1) * hidden_size + blockIdx.x * head_size;
+    for (size_t dim = threadIdx.x; dim < head_size; dim += DECODE_THREADS) {
+        cache_k[row][offset + dim] = new_k[row * hidden_size + blockIdx.x * head_size + dim];
+        cache_v[row][offset + dim] = new_v[row * hidden_size + blockIdx.x * head_size + dim];
+    }
+    __syncthreads();
+    decode_attention_head(query + row * hidden_size, cache_k[row], cache_v[row],
+                          out + row * hidden_size, length, n_heads, head_size);
 }
 
 void decode_attention_device(const float *d_query,
@@ -300,4 +337,21 @@ void multi_head_attention_gpu(const float *query,
     CUDA_CHECK(cudaFree(d_value));
     CUDA_CHECK(cudaFree(d_key));
     CUDA_CHECK(cudaFree(d_query));
+}
+
+void decode_attention_batch_device(const float *d_query,
+                                   const float *d_new_k,
+                                   const float *d_new_v,
+                                   float *const *d_cache_k,
+                                   float *const *d_cache_v,
+                                   const int *d_lengths,
+                                   float *d_out,
+                                   size_t rows,
+                                   size_t max_length,
+                                   size_t n_heads,
+                                   size_t head_size) {
+    dim3 blocks((unsigned)n_heads, (unsigned)rows);
+    decode_attention_batch_kernel<<<blocks, DECODE_THREADS, max_length * sizeof(float)>>>(
+        d_query, d_new_k, d_new_v, d_cache_k, d_cache_v, d_lengths, d_out, n_heads, head_size);
+    CUDA_CHECK_LAUNCH();
 }

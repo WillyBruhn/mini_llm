@@ -239,3 +239,88 @@ def test_queued_session_reports_misuse_and_a_reused_cache_starts_clean() -> None
             session.enqueue()  # two tokens stay queued and are never read
         # The same cache again: the unread tokens of the last session must be gone.
         assert _queued_session(engine, prompt, 8, lookahead=True) == expected
+
+
+def _batch_tokens(
+    engine: NativeGPT2, prompts: list[list[int]], steps: int
+) -> list[list[int]]:
+    """Greedy tokens of several prompts decoded together as one batch."""
+    caches = []
+    for _ in prompts:
+        cache = engine.try_take_cache()
+        assert cache is not None
+        caches.append(cache)
+    try:
+        last = [
+            engine.prefill_greedy(c, p) for c, p in zip(caches, prompts, strict=True)
+        ]
+        out = [[token] for token in last]
+        for _ in range(steps - 1):
+            last = engine.decode_batch(caches, last)
+            for tokens, token in zip(out, last, strict=True):
+                tokens.append(token)
+        return out
+    finally:
+        for cache in caches:
+            engine.release_cache(cache)
+
+
+@needs_gpu
+@pytest.mark.parametrize("fp16", [False, True])
+def test_batched_decode_generates_the_tokens_of_the_single_sequence_path(
+    fp16: bool,
+) -> None:
+    prompts = [[464, 3139, 286, 4881, 318], [15496, 11, 995], [40, 588, 257, 5916]]
+    with NativeGPT2(
+        WEIGHTS, GPU_LIBRARY, "gpu", EngineOptions(max_sessions=4, fp16_decode=fp16)
+    ) as engine:
+        expected = [_greedy_session(engine, p, 16) for p in prompts]
+        assert _batch_tokens(engine, prompts, 16) == expected
+
+
+@needs_gpu
+def test_the_batch_api_hands_out_each_cache_once_and_takes_it_back() -> None:
+    with NativeGPT2(
+        WEIGHTS, GPU_LIBRARY, "gpu", EngineOptions(max_sessions=2)
+    ) as engine:
+        first = engine.try_take_cache()
+        second = engine.try_take_cache()
+        assert first is not None and second is not None and first != second
+        assert engine.try_take_cache() is None  # both slots are taken
+        engine.release_cache(first)
+        again = engine.try_take_cache()
+        assert again == first
+        engine.release_cache(again)
+        engine.release_cache(second)
+
+
+@needs_gpu
+def test_the_batch_api_rejects_bad_input_with_an_error() -> None:
+    with NativeGPT2(
+        WEIGHTS, GPU_LIBRARY, "gpu", EngineOptions(max_sessions=2)
+    ) as engine:
+        cache = engine.try_take_cache()
+        assert cache is not None
+        with pytest.raises(RuntimeError):
+            engine.decode_batch([cache], [5])  # nothing prefilled yet
+        with pytest.raises(RuntimeError):
+            engine.prefill_greedy(cache, [])
+        with pytest.raises(RuntimeError):
+            engine.prefill_greedy(cache, [50257])
+        engine.prefill_greedy(cache, [464, 3139])
+        with pytest.raises(RuntimeError):
+            engine.decode_batch([cache], [-1])
+        with pytest.raises(RuntimeError):
+            engine.decode_batch([cache, cache], [5, 5])
+        engine.release_cache(cache)
+
+
+@needs_gpu
+def test_a_released_cache_starts_a_clean_sequence() -> None:
+    prompt = [464, 3139, 286, 4881, 318]
+    with NativeGPT2(
+        WEIGHTS, GPU_LIBRARY, "gpu", EngineOptions(max_sessions=1)
+    ) as engine:
+        expected = _batch_tokens(engine, [prompt], 8)
+        _batch_tokens(engine, [[1, 2, 3, 4, 5, 6, 7, 8, 9]], 5)
+        assert _batch_tokens(engine, [prompt], 8) == expected

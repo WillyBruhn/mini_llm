@@ -44,10 +44,14 @@ Kernel = tuple[int, int, str, int]
 
 
 def split_steps(kernels: list[Kernel], server: bool) -> list[list[Kernel]]:
-    """Group the kernels into decode steps. A step starts with the embed kernel."""
+    """Group the kernels into decode steps. A step starts with the embed kernel.
+
+    A batched step (report 009) starts with embed_batch_kernel, a prefill and a single-sequence
+    step with embed_tokens_kernel.
+    """
     steps: list[list[Kernel]] = []
     for kernel in kernels:
-        if kernel[2].startswith("embed_tokens"):
+        if kernel[2].startswith(("embed_tokens", "embed_batch")):
             steps.append([])
         if steps:
             steps[-1].append(kernel)
@@ -58,6 +62,33 @@ def split_steps(kernels: list[Kernel], server: bool) -> list[list[Kernel]]:
         decode_size = max(set(sizes), key=sizes.count)
         steps = [step for step in steps if len(step) == decode_size]
     return steps
+
+
+def log_whole_run(kernels: list[Kernel]) -> None:
+    """Where the GPU time of a whole server run went: decode steps, prefills, and idle."""
+    all_steps = split_steps(kernels, False)
+    sizes = [len(step) for step in all_steps]
+    decode_size = max(set(sizes), key=sizes.count)
+    decode = [step for step in all_steps if len(step) == decode_size]
+    other = [step for step in all_steps if len(step) != decode_size]
+    span = kernels[-1][1] - kernels[0][0]
+    decode_busy = sum(k[1] - k[0] for step in decode for k in step)
+    other_busy = sum(k[1] - k[0] for step in other for k in step)
+    logger.info("whole run: %.2f s from the first to the last kernel", span / 1e9)
+    logger.info(
+        "  decode steps: %d, kernels busy %.1f%% of the run",
+        len(decode),
+        100 * decode_busy / span,
+    )
+    logger.info(
+        "  other groups (prefills): %d, kernels busy %.1f%% of the run",
+        len(other),
+        100 * other_busy / span,
+    )
+    logger.info(
+        "  idle (no kernel running): %.1f%% of the run",
+        100 * (span - decode_busy - other_busy) / span,
+    )
 
 
 def main() -> None:
@@ -123,6 +154,8 @@ def main() -> None:
         if k[3] in launches
     ]
 
+    if args.server:
+        log_whole_run(kernels)
     logger.info("steps analysed: %d, launches per step: %d", count, len(steps[0]))
     logger.info("median step period: %.3f ms", median_period / 1e6)
     logger.info(

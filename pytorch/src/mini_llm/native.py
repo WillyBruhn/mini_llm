@@ -12,6 +12,8 @@ from typing import Literal
 import numpy as np
 from numpy.ctypeslib import ndpointer
 
+from mini_llm.batch_api import BatchMixin, declare_batch_functions
+
 Backend = Literal["cpu", "gpu"]
 
 _ROOT = Path(__file__).resolve().parents[3]
@@ -120,7 +122,7 @@ class CachedSession:
             raise RuntimeError("Native GPT-2 decode failed")
         return logits
 
-    # Greedy generation with the token chosen on the GPU (see docs/008_gpu_cpu_token_loop.md).
+    # Greedy generation with the token chosen on the GPU (see docs/serving/008_gpu_cpu_token_loop.md).
     # start() queues the prompt, enqueue() queues one more step for the newest token, and take()
     # waits for the oldest token that was not taken. enqueue() may be called before take(), so
     # that the GPU works on the next token while the host handles the last one.
@@ -164,7 +166,7 @@ class CachedSession:
         self.close()
 
 
-class NativeGPT2:
+class NativeGPT2(BatchMixin):
     """GPT-2 in C. With backend="gpu" the weights live on the GPU.
 
     A GPU model has one set of buffers, so calls are serialized with a lock.
@@ -176,7 +178,7 @@ class NativeGPT2:
     With use_kv_cache=False, or on the CPU, a session recomputes the whole sequence.
     With fp16_decode=True the decode steps read the weights as fp16 (+247 MB of GPU memory,
     about 1.4x faster decoding). The prompt is still read with the fp32 weights. It needs the
-    KV cache and the GPU, and it changes the logits slightly (see docs/006_fp16_weights.md).
+    KV cache and the GPU, and it changes the logits slightly (see docs/kernels/006_fp16_weights.md).
     """
 
     def __init__(
@@ -302,6 +304,7 @@ class NativeGPT2:
                 ctypes.POINTER(ctypes.c_int),
             ]
             library.gpt2_gpu_token_wait.restype = ctypes.c_int
+            declare_batch_functions(library)
 
     def forward_last(self, token_ids: np.ndarray) -> np.ndarray:
         tokens = np.ascontiguousarray(token_ids, dtype=np.int32)
@@ -332,6 +335,16 @@ class NativeGPT2:
             self._cache_slots.release()
             raise
         return CachedSession(self, cache)
+
+    def try_take_cache(self) -> int | None:
+        """A free KV cache, or None if all max_sessions are in use. Never waits."""
+        if not self._cache_slots.acquire(blocking=False):
+            return None
+        try:
+            return self._take_cache()
+        except BaseException:
+            self._cache_slots.release()
+            raise
 
     def _take_cache(self) -> int:
         with self._cache_lock:

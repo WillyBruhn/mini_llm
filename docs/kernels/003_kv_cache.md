@@ -120,8 +120,8 @@ Closed loop, streaming, short prompts, same workload before and after. "Before" 
 | 10 | 19.3 | 90.6 | 4.7x | 779 ms | 152 ms | 508.6 ms | 110.0 ms | 65.96 s | 14.08 s |
 | 20 | 19.3 | 90.9 | 4.7x | 1656 ms | 276 ms | 1019.3 ms | 219.7 ms | 132.40 s | 28.08 s |
 
-![16 tokens](images/003_kv_cache_16.png)
-![128 tokens](images/003_kv_cache_128.png)
+![16 tokens](../serving/images/003_kv_cache_16.png)
+![128 tokens](../serving/images/003_kv_cache_128.png)
 
 How I read it:
 

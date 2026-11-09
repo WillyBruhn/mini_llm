@@ -141,6 +141,29 @@ int gpt2_gpu_token_wait(GPT2GpuKvCache *cache, int *token);
 // Number of queued tokens that were not read yet.
 size_t gpt2_gpu_tokens_queued(const GPT2GpuKvCache *cache);
 
+// --- Batched decode: one step for several sequences, the weights are read once ---
+//
+// Decode is limited by the memory bandwidth needed to read the weights. If B sequences share one
+// pass over the weights, a step costs about as much as for one sequence and gives B tokens.
+
+// Most sequences in one batch.
+#define GPT2_GPU_MAX_BATCH 16
+
+// One decode step for `count` sequences (greedy). caches[i] is the cache of sequence i and
+// tokens[i] its newest token (the one the model predicted last; not in the cache yet). The
+// sequences may have different lengths. Every cache must hold a prompt and have room for one
+// more token; the caches must be different. On success the K and V of every token are stored,
+// every cache grows by one, and next_tokens[i] is the greedy choice after tokens[i].
+// Row i of the result does not depend on the other rows: it has the bits of the same sequence
+// in a batch of 1. Uses the fp16 weights if gpt2_gpu_model_enable_fp16_decode was called.
+// 88 kernel launches, whatever count is. Queued tokens of the caches (the *_enqueue functions)
+// are dropped. Returns 1 on success and 0 for invalid input (nothing changes).
+int gpt2_gpu_decode_batch(GPT2GpuModel *model,
+                          GPT2GpuKvCache *const *caches,
+                          const int *tokens,
+                          size_t count,
+                          int *next_tokens);
+
 #ifdef __cplusplus
 }
 #endif

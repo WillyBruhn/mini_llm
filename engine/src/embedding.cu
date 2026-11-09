@@ -85,3 +85,34 @@ void embed_tokens_gpu(float *out,
     CUDA_CHECK(cudaFree(d_token_embedding));
     CUDA_CHECK(cudaFree(d_tokens));
 }
+
+__global__ void embed_batch_kernel(float *out,
+                                   const int *tokens,
+                                   const int *positions,
+                                   const float *token_embedding,
+                                   const float *position_embedding,
+                                   size_t rows,
+                                   size_t n_embd) {
+    size_t index = blockIdx.x * blockDim.x + threadIdx.x;
+    if (index >= rows * n_embd) {
+        return;
+    }
+    size_t row = index / n_embd;
+    size_t dim = index % n_embd;
+    out[index] = token_embedding[(size_t)tokens[row] * n_embd + dim] +
+                 position_embedding[(size_t)positions[row] * n_embd + dim];
+}
+
+void embed_batch_device(float *d_out,
+                        const int *d_tokens,
+                        const int *d_positions,
+                        const float *d_token_embedding,
+                        const float *d_position_embedding,
+                        size_t rows,
+                        size_t n_embd) {
+    int threads_per_block = 256;
+    int blocks = (int)ceil_div(rows * n_embd, threads_per_block);
+    embed_batch_kernel<<<blocks, threads_per_block>>>(
+        d_out, d_tokens, d_positions, d_token_embedding, d_position_embedding, rows, n_embd);
+    CUDA_CHECK_LAUNCH();
+}

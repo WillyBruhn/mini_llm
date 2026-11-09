@@ -23,7 +23,8 @@ typedef struct {
     int kv_cache;
     int profile_decode;
     int fp16_weights; // decode with fp16 weights (needs --kv-cache)
-    // How the host gets the next token (needs --kv-cache), see docs/008_gpu_cpu_token_loop.md.
+    // How the host gets the next token (needs --kv-cache), see
+    // docs/serving/008_gpu_cpu_token_loop.md.
     DecodeMode decode_mode;
     // Busy-wait this long after every token. Stands in for what the server does with a token
     // (tokenizer, JSON, thread hop), so that the effect of the lookahead can be seen in C.

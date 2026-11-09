@@ -197,7 +197,7 @@ Server (`scripts/benchmark_throughput.py`), KV cache on, same workload as `003`.
 | 10 | 89.8 | 217.6 | 2.4x | 108.9 ms | 39.9 ms | 1.76 s | 0.72 s |
 | 20 | 89.6 | 215.1 | 2.4x | 218.5 ms | 81.4 ms | 3.53 s | 1.47 s |
 
-![Before and after, 128 tokens](images/004_gemv_128.png)
+![Before and after, 128 tokens](../serving/images/004_gemv_128.png)
 
 - **The kernel time per step fell from 10.67 ms to 3.88 ms (2.75x), and the server gained 2.4 to 2.6x.** The server is a bit below what the kernel time suggests: 237 tok/s is 4.2 ms per token against 3.88 ms of kernel time. The rest (about 0.3 ms) is the work between steps (copy of the logits, argmax, tokenizer decode, launches). It was negligible before, and it is a larger share now.
 - **Throughput is still flat as users are added** (about 237 tok/s from 1 to 20 users). The server still handles one request at a time. This change was not meant to fix that.

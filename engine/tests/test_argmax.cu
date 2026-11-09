@@ -1,6 +1,7 @@
 #include "test_util.h"
 
 #include "../include/argmax.h"
+#include "../include/cuda_check.h"
 
 #include <cuda_runtime.h>
 
@@ -136,6 +137,39 @@ TEST(argmax_matches_the_cpu_reference_on_random_vectors) {
         ASSERT_TRUE(gpu_argmax(values, n) == reference_argmax(values, n));
         free(values);
     }
+}
+
+TEST(argmax_rows_gives_the_index_inside_each_row) {
+    const size_t rows = 5, n = 50257;
+    float *values = (float *)malloc(rows * n * sizeof(float));
+    ASSERT_TRUE(values != NULL);
+    srand(9);
+    for (size_t index = 0; index < rows * n; index++) {
+        values[index] = (float)(rand() % 20);
+    }
+    // Row 3 has a NaN, row 4 has its maximum in the last place.
+    values[3 * n + 777] = NAN;
+    values[4 * n + n - 1] = 100.0f;
+    float *d_values = NULL;
+    int *d_result = NULL;
+    ASSERT_TRUE(cudaMalloc((void **)&d_values, rows * n * sizeof(float)) == cudaSuccess);
+    ASSERT_TRUE(cudaMalloc((void **)&d_result, rows * sizeof(int)) == cudaSuccess);
+    ASSERT_TRUE(cudaMemset(d_result, 0xff, rows * sizeof(int)) == cudaSuccess);
+    ASSERT_TRUE(cudaMemcpy(d_values, values, rows * n * sizeof(float), cudaMemcpyHostToDevice) ==
+                cudaSuccess);
+    unsigned long before = cuda_launch_count();
+    argmax_rows_device(d_values, rows, n, d_result);
+    ASSERT_TRUE(cuda_launch_count() - before == 1);
+    int result[5];
+    ASSERT_TRUE(cudaMemcpy(result, d_result, sizeof(result), cudaMemcpyDeviceToHost) ==
+                cudaSuccess);
+    for (size_t row = 0; row < rows; row++) {
+        ASSERT_TRUE(result[row] == reference_argmax(values + row * n, n));
+    }
+    ASSERT_TRUE(result[3] == 777 && result[4] == (int)n - 1);
+    ASSERT_TRUE(cudaFree(d_values) == cudaSuccess);
+    ASSERT_TRUE(cudaFree(d_result) == cudaSuccess);
+    free(values);
 }
 
 TEST_MAIN()

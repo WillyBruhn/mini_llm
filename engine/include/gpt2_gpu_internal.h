@@ -23,9 +23,10 @@ struct GPT2GpuModel {
     int *tokens;
     float *hidden;
     float *next_hidden;
-    float *final_norm; // [1, hidden]: only the last token goes through the head
-    float *logits;     // [1, vocab]
-    int *next_token;   // the token that the argmax chose, for the greedy functions without queue
+    float *final_norm;                 // [1, hidden]: only the last token goes through the head
+    float *logits;                     // [1, vocab]
+    struct GPT2GpuBatchBuffers *batch; // allocated at the first batched step
+    int *next_token; // the token that the argmax chose, for the greedy functions without queue
 
     // Optional fp16 copy of the matrices that a decode step multiplies with.
     int fp16_enabled;
@@ -70,6 +71,9 @@ void gpt2_gpu_decode_core(GPT2GpuModel *model,
                           GPT2GpuKvCache *cache,
                           const int *d_token,
                           GpuTimer *timer);
+
+// Frees the buffers of the batched decode (gpt2_gpu_batch.cu). Does nothing if there are none.
+void gpt2_gpu_batch_buffers_free(GPT2GpuModel *model);
 
 // 1 if the cache holds a prompt and has room for one more token.
 int gpt2_gpu_can_decode(const GPT2GpuModel *model, const GPT2GpuKvCache *cache);

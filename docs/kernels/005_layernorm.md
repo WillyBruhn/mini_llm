@@ -187,7 +187,7 @@ Server (`scripts/benchmark_throughput.py`), KV cache on, matrix-vector kernel in
 | 10 | 212.6 | 317.7 | 1.49x | 40.9 ms | 25.8 ms | 151 ms | 120 ms | 0.74 s | 0.49 s |
 | 20 | 214.0 | 320.0 | 1.50x | 81.8 ms | 51.7 ms | 260 ms | 219 ms | 1.48 s | 0.98 s |
 
-![Before and after, 128 tokens](images/005_layernorm_128.png)
+![Before and after, 128 tokens](../serving/images/005_layernorm_128.png)
 
 - The kernel time of a decode step fell by 1.69x (3.87 → 2.29 ms), and the server gained 1.5 to 1.6x. The server rate (370 tok/s = 2.7 ms per token) is above the kernel time (2.29 ms) by about 0.4 ms. That gap was 0.37 ms before (4.24 ms per token against 3.87 ms of kernel time), so it did not change. It is now 15% of each token, against 9% before.
 - The generated text is the same as before: ` the capital of the French Republic, and the capital of the` for the prompt "The capital of France is".

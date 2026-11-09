@@ -1,6 +1,6 @@
 """Plot benchmark_throughput.py results of several runs in one figure.
 
-    uv run --group dev scripts/compare_benchmarks.py -o docs/images/004.png \
+    uv run --group dev scripts/compare_benchmarks.py -o docs/kernels/images/004.png \
         "no KV cache=build/benchmarks/baseline128" "KV cache=build/benchmarks/kv128"
 
 Each run is a directory (the newest .json in it is used) or a .json file.

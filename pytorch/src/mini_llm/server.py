@@ -77,7 +77,7 @@ class InferenceService:
         self.tokenizer = tokenizer
         self.model_name = model_name
         # Queue the step for token k+1 before token k is read, so the GPU does not wait
-        # for the Python work between two tokens (docs/008_gpu_cpu_token_loop.md).
+        # for the Python work between two tokens (docs/serving/008_gpu_cpu_token_loop.md).
         self.lookahead = lookahead
 
     def _prepare(self, prompt: str, max_new_tokens: int | None) -> list[int]:

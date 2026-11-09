@@ -15,6 +15,9 @@ extern "C" {
 // for millions of values.
 void argmax_device(const float *d_values, size_t n, int *d_result);
 
+// The same for `rows` rows of n floats: d_result[r] is the index in row r (0 to n - 1).
+void argmax_rows_device(const float *d_values, size_t rows, size_t n, int *d_result);
+
 #ifdef __cplusplus
 }
 #endif
