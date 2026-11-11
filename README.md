@@ -6,8 +6,9 @@ Every step is a numbered report with a prediction written **before** the change,
 
 | Where | What |
 |---|---|
-| [docs/kernels/](docs/kernels/README.md) | Kernels and the single-request path: reports 001–007 |
+| [docs/kernels/](docs/kernels/README.md) | Kernels and the single-request path: reports 001–007 and 010 |
 | [docs/serving/](docs/serving/README.md) | Server, load test, scheduler and batching: reports 008–009, plus the server results of every step |
+| [docs/profiling/](docs/profiling/001_batched_baseline.md) | Profiling reports with viewer screenshots (nsys, ncu) |
 | [Run](#run) | Build, test, benchmark, profile, serve |
 
 ## Status
@@ -17,11 +18,12 @@ GPT-2 small on one RTX 3060, fp16 weights in decode:
 | | tokens/s |
 |---|---|
 | first GPU version, one sequence | 3.4 |
-| one sequence now | 659 (engine, context 128) |
+| one sequence now | 754 (engine, context 128) |
 | server, 20 concurrent users, one request at a time (report 008) | 762 |
-| **server, 20 concurrent users, continuous batching (report 009)** | **3352** |
+| server, 20 concurrent users, continuous batching (report 009) | 3352 |
+| **server, 20 concurrent users, faster batched matrix kernel (report 010)** | **3986** |
 
-The next steps are prefill (25% of the GPU time at 20 users), the batched matrix kernel, and a paged KV cache.
+The next steps are prefill (25% of the GPU time at 20 users), the head of the batched matrix kernel, and a paged KV cache.
 
 ## Kernels and the single-request path
 
@@ -60,9 +62,10 @@ Closed-loop load test (`scripts/benchmark_throughput.py`), 20 concurrent users, 
 | + fp16 weights in decode (opt-in) | 445.4 | 43.7 ms | 5.7 s | [006](docs/kernels/006_fp16_weights.md) |
 | + fewer launches | 627.3 | 29.9 ms | 4.1 s | [007](docs/kernels/007_fewer_launches.md) |
 | + token chosen on the GPU, lock-free wait | 762 | 24.4 ms | 3.3 s | [008](docs/serving/008_gpu_cpu_token_loop.md) |
-| + **scheduler, continuous batching, batched decode kernels** | **3352** | **3.0 ms** | **0.61 s** | [009](docs/serving/009_batched_decode.md) |
+| + scheduler, continuous batching, batched decode kernels | 3352 | 3.0 ms | 0.61 s | [009](docs/serving/009_batched_decode.md) |
+| + faster batched matrix kernel (2 columns per thread, x by `cp.async`) | **3986** | **2.4 ms** | **0.51 s** | [010](docs/kernels/010_matvec_batch.md) |
 
-With fp32 weights the last two rows are 484 and 2883 tok/s. Numbers are the mean of two runs.
+With fp32 weights the rows 008 and 009 are 484 and 2883 tok/s (not measured for 010). Numbers are the mean of two runs.
 
 Findings:
 

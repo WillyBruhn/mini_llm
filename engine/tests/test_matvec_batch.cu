@@ -18,10 +18,27 @@ static float *device_garbage(size_t count) {
     return device;
 }
 
+// The matrices and x are followed by NaN bytes (0xff is a NaN as fp32 and as fp16). A kernel
+// that reads past the end of a matrix or of x, even one value, makes a NaN in its result.
+enum { GUARD_VALUES = 4096 };
+
+static float *to_device_guarded(const float *host, size_t count) {
+    float *device = NULL;
+    ASSERT_TRUE(cudaMalloc((void **)&device, (count + GUARD_VALUES) * sizeof(float)) ==
+                cudaSuccess);
+    ASSERT_TRUE(cudaMemset(device, 0xff, (count + GUARD_VALUES) * sizeof(float)) == cudaSuccess);
+    ASSERT_TRUE(cudaMemcpy(device, host, count * sizeof(float), cudaMemcpyHostToDevice) ==
+                cudaSuccess);
+    return device;
+}
+
 static unsigned short *to_half_device(const float *host, size_t count) {
     float *d_source = to_device(host, count);
     unsigned short *d_half = NULL;
-    ASSERT_TRUE(cudaMalloc((void **)&d_half, count * sizeof(unsigned short)) == cudaSuccess);
+    ASSERT_TRUE(cudaMalloc((void **)&d_half, (count + GUARD_VALUES) * sizeof(unsigned short)) ==
+                cudaSuccess);
+    ASSERT_TRUE(cudaMemset(d_half, 0xff, (count + GUARD_VALUES) * sizeof(unsigned short)) ==
+                cudaSuccess);
     convert_f32_to_f16_device(d_source, d_half, count);
     ASSERT_TRUE(cudaDeviceSynchronize() == cudaSuccess);
     ASSERT_TRUE(cudaFree(d_source) == cudaSuccess);
@@ -48,7 +65,26 @@ typedef struct {
     int products;
     int use_half;
     MatvecEpilogue epilogue;
+    size_t skip; // the matrix starts this many weights after an aligned address
 } Case;
+
+// A copy of `count` weights of `bytes` each that starts `skip` weights after an aligned address.
+// `*base` is what to free.
+static void *shift_weights(void *source, size_t count, size_t bytes, size_t skip, void **base) {
+    if (skip == 0) {
+        *base = source;
+        return source;
+    }
+    char *shifted = NULL;
+    ASSERT_TRUE(cudaMalloc((void **)&shifted, (count + skip + GUARD_VALUES) * bytes) ==
+                cudaSuccess);
+    ASSERT_TRUE(cudaMemset(shifted, 0xff, (count + skip + GUARD_VALUES) * bytes) == cudaSuccess);
+    ASSERT_TRUE(cudaMemcpy(shifted + skip * bytes, source, count * bytes,
+                           cudaMemcpyDeviceToDevice) == cudaSuccess);
+    ASSERT_TRUE(cudaFree(source) == cudaSuccess);
+    *base = shifted;
+    return shifted + skip * bytes;
+}
 
 // Runs the single-row kernel once per row and the batched kernel once, and compares all bits.
 static void check_case(Case c, unsigned seed) {
@@ -59,17 +95,22 @@ static void check_case(Case c, unsigned seed) {
     float *d_weights_f32[3] = {NULL, NULL, NULL};
     unsigned short *d_weights_f16[3] = {NULL, NULL, NULL};
     float *d_bias[3];
+    void *weight_base[3] = {NULL, NULL, NULL};
     for (int p = 0; p < c.products; p++) {
         weights[p] = random_floats(c.k * c.n, seed + 10 + (unsigned)p);
         bias[p] = random_floats(c.n, seed + 20 + (unsigned)p);
         d_bias[p] = to_device(bias[p], c.n);
         if (c.use_half) {
-            d_weights_f16[p] = to_half_device(weights[p], c.k * c.n);
+            d_weights_f16[p] =
+                (unsigned short *)shift_weights(to_half_device(weights[p], c.k * c.n), c.k * c.n,
+                                                sizeof(unsigned short), c.skip, &weight_base[p]);
         } else {
-            d_weights_f32[p] = to_device(weights[p], c.k * c.n);
+            d_weights_f32[p] =
+                (float *)shift_weights(to_device_guarded(weights[p], c.k * c.n), c.k * c.n,
+                                       sizeof(float), c.skip, &weight_base[p]);
         }
     }
-    float *d_x = to_device(x, c.rows * c.k);
+    float *d_x = to_device_guarded(x, c.rows * c.k);
     float *d_residual = to_device(residual, c.rows * c.n);
 
     float *d_batch_out[3];
@@ -105,8 +146,7 @@ static void check_case(Case c, unsigned seed) {
         ASSERT_TRUE(cudaFree(d_batch_out[p]) == cudaSuccess);
         ASSERT_TRUE(cudaFree(d_single_out[p]) == cudaSuccess);
         ASSERT_TRUE(cudaFree(d_bias[p]) == cudaSuccess);
-        ASSERT_TRUE(cudaFree(c.use_half ? (void *)d_weights_f16[p] : (void *)d_weights_f32[p]) ==
-                    cudaSuccess);
+        ASSERT_TRUE(cudaFree(weight_base[p]) == cudaSuccess);
         free(weights[p]);
         free(bias[p]);
     }
@@ -154,6 +194,28 @@ TEST(batch_matches_for_sizes_that_are_not_multiples_of_the_tiles) {
     check_case((Case){7, 50, 70, 2, 0, MATVEC_EPILOGUE_BIAS}, 501);
     check_case((Case){3, 1, 33, 1, 0, MATVEC_EPILOGUE_NONE}, 502);
     check_case((Case){16, 129, 31, 1, 1, MATVEC_EPILOGUE_NONE}, 503);
+}
+
+// Several tiles and a last tile that is only partly inside k: no read past the matrix (the NaN
+// guard behind the weights and behind x would show it).
+TEST(batch_reads_nothing_past_the_matrix_when_k_is_not_a_multiple_of_the_tile) {
+    check_case((Case){16, 1000, 100, 1, 1, MATVEC_EPILOGUE_BIAS_RESIDUAL}, 510);
+    check_case((Case){16, 1000, 100, 1, 0, MATVEC_EPILOGUE_BIAS_RESIDUAL}, 511);
+    check_case((Case){5, 3000, 65, 2, 1, MATVEC_EPILOGUE_BIAS}, 512);
+    check_case((Case){16, 255, 96, 1, 1, MATVEC_EPILOGUE_BIAS_GELU}, 513);
+    check_case((Case){16, 257, 96, 1, 1, MATVEC_EPILOGUE_NONE}, 514);
+    check_case((Case){3, 768, 47, 1, 1, MATVEC_EPILOGUE_NONE}, 515);
+}
+
+// A row of weights is read two at a time. A matrix that starts at an odd weight, an odd n and n = 1
+// cannot be read that way.
+TEST(batch_matches_for_matrices_that_do_not_start_at_an_even_weight_and_for_n_of_1) {
+    check_case((Case){6, 300, 64, 1, 1, MATVEC_EPILOGUE_BIAS, 1}, 520);
+    check_case((Case){6, 300, 64, 1, 0, MATVEC_EPILOGUE_BIAS, 1}, 521);
+    check_case((Case){16, 800, 100, 2, 1, MATVEC_EPILOGUE_NONE, 3}, 522);
+    check_case((Case){5, 200, 1, 1, 1, MATVEC_EPILOGUE_NONE, 0}, 523);
+    check_case((Case){5, 200, 1, 1, 0, MATVEC_EPILOGUE_BIAS, 0}, 524);
+    check_case((Case){5, 200, 2, 1, 1, MATVEC_EPILOGUE_NONE, 0}, 525);
 }
 
 TEST(batch_matches_for_the_output_head_shape) {

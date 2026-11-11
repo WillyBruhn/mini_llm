@@ -40,5 +40,6 @@ The decode column is for 16 tokens. Without a KV cache the decode speed falls as
 | [005](005_layernorm.md) | layernorm: one block per row |
 | [006](006_fp16_weights.md) | fp16 weights in decode (roofline) |
 | [007](007_fewer_launches.md) | fused epilogues: 219 → 87 launches |
+| [010](010_matvec_batch.md) | batched matrix kernel: 2 columns per thread, x by `cp.async` (step 2.16 → 1.49 ms at 16 rows) |
 
 Later steps that are about the server and the scheduler: [008](../serving/008_gpu_cpu_token_loop.md) (token chosen on the GPU) and [009](../serving/009_batched_decode.md) (batched decode).

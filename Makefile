@@ -98,6 +98,14 @@ $(BUILD)/bench_batch.o: engine/bench/bench_batch.c $(wildcard engine/include/*.h
 $(BUILD)/bench_batch: $(BUILD)/bench_batch.o $(NVLINK_DEPS) | $(BUILD)
 	$(NVCC) $(NVFLAGS) -o $@ $(BUILD)/bench_batch.o $(CUDA_SRCS) $(filter-out $(BUILD)/main.o,$(CPU_OBJS)) $(LDFLAGS)
 
+$(BUILD)/bench_matvec_batch: engine/bench/bench_matvec_batch.cu $(wildcard engine/include/*.h) $(NVLINK_DEPS) | $(BUILD)
+	$(NVCC) $(NVFLAGS) -o $@ $< $(CUDA_SRCS) $(filter-out $(BUILD)/main.o,$(CPU_OBJS)) $(LDFLAGS)
+
+# The five products of a decode step alone. Example: make bench-matvec GPU=2 MATVEC_ARGS="--rows 16"
+MATVEC_ARGS ?=
+bench-matvec: $(BUILD)/bench_matvec_batch
+	CUDA_VISIBLE_DEVICES=$(GPU) ./$< $(MATVEC_ARGS)
+
 # Batched decode, engine only. Example: make bench-batch GPU=2 BATCH_ARGS="--batch 16 --fp16-weights"
 BATCH_ARGS ?=
 bench-batch: $(BUILD)/bench_batch
@@ -129,6 +137,11 @@ PROFILE_DECODE_EXTRA ?=
 PROFILE_DECODE_ARGS ?= --backend gpu --prompt-tokens 128 --decode-tokens 41 --warmup 1 --runs 1 --no-check --kv-cache --profile-decode $(PROFILE_DECODE_EXTRA)
 profile-nsys-decode: $(BUILD)/bench
 	CUDA_VISIBLE_DEVICES=$(GPU) nsys profile $(NSYS_FLAGS) --stats=true -o $(BUILD)/report_decode ./$< $(PROFILE_DECODE_ARGS)
+
+# Timeline of the batched decode steps only (engine, no server). Writes build/report_batch.nsys-rep.
+# Example: make profile-nsys-batch GPU=2 BATCH_ARGS="--batch 16 --fp16-weights"
+profile-nsys-batch: $(BUILD)/bench_batch
+	CUDA_VISIBLE_DEVICES=$(GPU) nsys profile $(NSYS_FLAGS) -o $(BUILD)/report_batch ./$< --repeats 1 --steps 60 --profile $(BATCH_ARGS)
 
 # Deep look at ONE kernel (the first launch that matches KERNEL).
 # Example: make profile-ncu KERNEL=mult_kernel
@@ -232,4 +245,4 @@ $(BUILD):
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: serve-batched bench-batch gpu-lib serve serve-gpu all test gpt2-test sanitize-cpu test-gpu gpt2-gpu-test sanitize-gpu bench-gpu bench-cpu profile-nsys profile-nsys-decode profile-ncu pytorch-test inference-lib reference weights run clean check format ruff-format-check ruff-check mypy clang-format-check file-length semgrep semgrep-test
+.PHONY: bench-matvec profile-nsys-batch serve-batched bench-batch gpu-lib serve serve-gpu all test gpt2-test sanitize-cpu test-gpu gpt2-gpu-test sanitize-gpu bench-gpu bench-cpu profile-nsys profile-nsys-decode profile-ncu pytorch-test inference-lib reference weights run clean check format ruff-format-check ruff-check mypy clang-format-check file-length semgrep semgrep-test

@@ -8,6 +8,7 @@
 
 #include "../include/gpt2.h"
 #include "../include/gpt2_gpu.h"
+#include "../include/gpu_timer.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -26,10 +27,13 @@ int main(int argc, char **argv) {
     int steps = 100;
     int fp16 = 0;
     int repeats = 5;
+    int profile = 0; // mark the timed steps of the last repeat for nsys (cudaProfilerApi)
     const char *weights = "engine/tests/reference_data/weights";
     for (int index = 1; index < argc; index++) {
         if (strcmp(argv[index], "--fp16-weights") == 0) {
             fp16 = 1;
+        } else if (strcmp(argv[index], "--profile") == 0) {
+            profile = 1;
         } else if (index + 1 < argc && strcmp(argv[index], "--batch") == 0) {
             batch = atoi(argv[++index]);
         } else if (index + 1 < argc && strcmp(argv[index], "--context") == 0) {
@@ -40,7 +44,7 @@ int main(int argc, char **argv) {
             repeats = atoi(argv[++index]);
         } else {
             fprintf(stderr, "usage: bench_batch [--batch B] [--context N] [--steps N] "
-                            "[--repeats N] [--fp16-weights]\n");
+                            "[--repeats N] [--fp16-weights] [--profile]\n");
             return 2;
         }
     }
@@ -80,12 +84,19 @@ int main(int argc, char **argv) {
         }
         gpt2_gpu_decode_batch(model, caches, current, (size_t)batch, next); // warm-up step
         memcpy(current, next, sizeof(current));
+        int profiled = profile && repeat == repeats - 1;
+        if (profiled) {
+            gpu_profiler_start();
+        }
         double start = now_ms();
         for (int step = 1; step < steps; step++) {
             gpt2_gpu_decode_batch(model, caches, current, (size_t)batch, next);
             memcpy(current, next, sizeof(current));
         }
         times[repeat] = (now_ms() - start) / (steps - 1);
+        if (profiled) {
+            gpu_profiler_stop();
+        }
     }
     int count = repeats < 64 ? repeats : 64;
     for (int i = 0; i < count; i++) {
